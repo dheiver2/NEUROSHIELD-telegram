@@ -1,0 +1,45 @@
+{
+  "empresas": [
+    {
+      "id": "pcsafe",
+      "nome": "PCSafe",
+      "telegram_chat_ids": [
+        "5871339278",
+        "6452106412",
+        "8566048157"
+      ],
+      "cameras": [
+        {
+          "id": "cam_1",
+          "nome": "Camera 1 - Ch1",
+          "rtsp_url": "rtsp://apoio:apoio2025@189.89.50.1:7081/cam/realmonitor?channel=1&subtype=0",
+          "ativa": true
+        },
+        {
+          "id": "cam_2",
+          "nome": "Camera 2 - Ch5",
+          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=5&subtype=0",
+          "ativa": true
+        },
+        {
+          "id": "cam_3",
+          "nome": "Camera 3 - Ch1",
+          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=1&subtype=0",
+          "ativa": true
+        },
+        {
+          "id": "cam_4",
+          "nome": "Camera 4 - Ch7",
+          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=7&subtype=0",
+          "ativa": true
+        },
+        {
+          "id": "cam_5",
+          "nome": "Camera 5 - Ch14",
+          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=14&subtype=0",
+          "ativa": true
+        }
+      ]
+    }
+  ]
+}
