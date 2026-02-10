@@ -111,6 +111,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Configurações sensíveis do projeto
+config/.env
+config/empresas.json
+
 # Spyder project settings
 .spyderproject
 .spyproject
