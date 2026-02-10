@@ -40,6 +40,9 @@ SEND_COOLDOWN = int(os.getenv("SEND_COOLDOWN", "1"))
 SEND_WIDTH = int(os.getenv("SEND_MAX_WIDTH", "960"))
 SEND_TIMEOUT = int(os.getenv("SEND_TIMEOUT", "8"))
 STARTUP_PING = os.getenv("TELEGRAM_STARTUP_PING", "0") == "1"
+SEND_MIN_STREAK = int(os.getenv("SEND_MIN_STREAK", "1"))
+SEND_MIN_MOVEMENT_SCORE = int(os.getenv("SEND_MIN_MOVEMENT_SCORE", "0"))
+SEND_MIN_MOVED_OBJECTS = int(os.getenv("SEND_MIN_MOVED_OBJECTS", "1"))
 
 # Tracking (multi-objeto)
 TRACK_IOU_THRESHOLD = float(os.getenv("TRACK_IOU_THRESHOLD", "0.30"))
@@ -418,6 +421,7 @@ class CameraMonitor:
         self.track_max_misses = TRACK_MAX_MISSES
         self.track_min_hits = TRACK_MIN_HITS
         self.movement_threshold = 30  # Pixels mínimos de movimento
+        self.movement_streak = 0
         
         # Sistema de detecção de mudança de cena
         self.last_scene_signature = None  # Assinatura da última cena enviada
@@ -735,48 +739,62 @@ class CameraMonitor:
                             has_movement, movement_score, moved_detections = self._calculate_movement(important_detections, current_time)
                             
                             if has_movement and moved_detections:
-                                # Cooldown global mínimo
-                                if current_time - self.last_send_time >= SEND_COOLDOWN:
-                                    # Calcula hash e assinatura da cena atual
-                                    current_hash = self._calculate_frame_hash(frame)
-                                    current_signature = self._calculate_scene_signature(important_detections)
-                                    
-                                    # Verifica se a cena mudou significativamente
-                                    if self._is_scene_different(current_signature, current_hash):
-                                        # Desenha caixas de todos os objetos importantes do frame
-                                        frame_with_boxes = self.detector.draw_boxes(frame.copy(), important_detections)
+                                qualifies = (
+                                    movement_score >= SEND_MIN_MOVEMENT_SCORE and
+                                    len(moved_detections) >= SEND_MIN_MOVED_OBJECTS
+                                )
+                                if qualifies:
+                                    self.movement_streak += 1
+                                else:
+                                    self.movement_streak = 0
+
+                                if self.movement_streak >= SEND_MIN_STREAK:
+                                    # Cooldown global mínimo
+                                    if current_time - self.last_send_time >= SEND_COOLDOWN:
+                                        # Calcula hash e assinatura da cena atual
+                                        current_hash = self._calculate_frame_hash(frame)
+                                        current_signature = self._calculate_scene_signature(important_detections)
                                         
-                                        # Log detalhado
-                                        obj_info = []
-                                        for d in important_detections:
-                                            priority = d.get('priority', 'N/A')
-                                            conf = d['confidence']
-                                            dist = d.get('movement_distance', 0)
-                                            track_id = d.get('track_id')
-                                            if d.get('track_is_new'):
-                                                dist_label = "NEW"
-                                            else:
-                                                dist_label = f"{dist}px"
-                                            obj_info.append(f"{d['class']}#{track_id}({priority},{conf:.0%},{dist_label})")
-                                        
-                                        obj_list = ", ".join(obj_info)
-                                        logger.info(f"🎯 Mudança detectada ({movement_score}%): {obj_list} - {self.camera_name}")
-                                        
-                                        # Envia para Telegram
-                                        await self.telegram_bot.send_detection(
-                                            frame_with_boxes, self.camera_name, important_detections,
-                                            self.chat_ids, self.empresa_nome
-                                        )
-                                        
-                                        # Atualiza timestamps (SEM cooldown individual por classe)
-                                        self.last_send_time = current_time
-                                        self.last_scene_signature = current_signature
-                                        self.last_frame_hash = current_hash
-                                    else:
-                                        logger.debug(f"⏭️ Cena repetida ignorada - {self.camera_name}")
+                                        # Verifica se a cena mudou significativamente
+                                        if self._is_scene_different(current_signature, current_hash):
+                                            # Desenha caixas de todos os objetos importantes do frame
+                                            frame_with_boxes = self.detector.draw_boxes(frame.copy(), important_detections)
+                                            
+                                            # Log detalhado
+                                            obj_info = []
+                                            for d in important_detections:
+                                                priority = d.get('priority', 'N/A')
+                                                conf = d['confidence']
+                                                dist = d.get('movement_distance', 0)
+                                                track_id = d.get('track_id')
+                                                if d.get('track_is_new'):
+                                                    dist_label = "NEW"
+                                                else:
+                                                    dist_label = f"{dist}px"
+                                                obj_info.append(f"{d['class']}#{track_id}({priority},{conf:.0%},{dist_label})")
+                                            
+                                            obj_list = ", ".join(obj_info)
+                                            logger.info(f"🎯 Mudança detectada ({movement_score}%): {obj_list} - {self.camera_name}")
+                                            
+                                            # Envia para Telegram
+                                            await self.telegram_bot.send_detection(
+                                                frame_with_boxes, self.camera_name, important_detections,
+                                                self.chat_ids, self.empresa_nome
+                                            )
+                                            
+                                            # Atualiza timestamps (SEM cooldown individual por classe)
+                                            self.last_send_time = current_time
+                                            self.last_scene_signature = current_signature
+                                            self.last_frame_hash = current_hash
+                                            self.movement_streak = 0
+                                        else:
+                                            logger.debug(f"⏭️ Cena repetida ignorada - {self.camera_name}")
+                            else:
+                                self.movement_streak = 0
                     else:
                         # Nenhum objeto detectado - reseta tracking
                         self.tracks = {}
+                        self.movement_streak = 0
                     
                     # Pequeno delay para não sobrecarregar
                     await asyncio.sleep(0.1)
