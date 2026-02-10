@@ -1,0 +1,25 @@
+{
+  "empresas": [
+    {
+      "id": "exemplo_empresa",
+      "nome": "Empresa Exemplo LTDA",
+      "telegram_chat_ids": [
+        "SEU_CHAT_ID_AQUI"
+      ],
+      "cameras": [
+        {
+          "id": "cam_1",
+          "nome": "Câmera Entrada Principal",
+          "rtsp_url": "rtsp://usuario:senha@192.168.1.100:554/stream",
+          "ativa": true
+        },
+        {
+          "id": "cam_2",
+          "nome": "Câmera Estacionamento",
+          "rtsp_url": "rtsp://usuario:senha@192.168.1.101:554/stream",
+          "ativa": true
+        }
+      ]
+    }
+  ]
+}
