@@ -9,8 +9,10 @@ import cv2
 import asyncio
 import logging
 import json
-from datetime import datetime
-from telegram import Bot
+from datetime import datetime, timedelta
+from collections import defaultdict, Counter
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from ultralytics import YOLO
 from dotenv import load_dotenv
 
@@ -169,6 +171,177 @@ total_cameras = sum(len([c for c in emp['cameras'] if c.get('ativa', True)]) for
 total_chat_ids = sum(len(emp['telegram_chat_ids']) for emp in EMPRESAS)
 
 logger.info(f"🚀 Configuração carregada: {len(EMPRESAS)} empresa(s), {total_cameras} câmera(s), {total_chat_ids} chat(s)")
+
+
+# ═══════════════════════════════════════════════════════════
+# SISTEMA DE ESTATÍSTICAS E RELATÓRIOS
+# ═══════════════════════════════════════════════════════════
+class DetectionStats:
+    """Sistema de estatísticas de detecções para relatórios"""
+    
+    def __init__(self):
+        self.reset_daily_stats()
+    
+    def reset_daily_stats(self):
+        """Reseta estatísticas diárias"""
+        self.today = datetime.now().date()
+        self.total_detections = 0
+        self.total_frames_sent = 0
+        self.detections_by_class = Counter()  # {class_name: count}
+        self.detections_by_hour = defaultdict(int)  # {hour: count}
+        self.detections_by_camera = defaultdict(int)  # {camera_name: count}
+        self.detections_by_priority = Counter()  # {priority: count}
+        self.events_triggered = Counter()  # {event_type: count}
+        self.frames_ignored = 0  # Frames ignorados por similaridade
+        self.first_detection_time = None
+        self.last_detection_time = None
+        self.cameras_active = set()  # Câmeras que tiveram detecção
+    
+    def check_and_reset(self):
+        """Verifica se mudou o dia e reseta se necessário"""
+        current_date = datetime.now().date()
+        if current_date != self.today:
+            logger.info(f"📅 Novo dia detectado, resetando estatísticas")
+            self.reset_daily_stats()
+    
+    def record_detection(self, camera_name, detections, events=None, frame_sent=True):
+        """Registra uma detecção"""
+        self.check_and_reset()
+        
+        now = datetime.now()
+        
+        if frame_sent:
+            self.total_frames_sent += 1
+            if self.first_detection_time is None:
+                self.first_detection_time = now
+            self.last_detection_time = now
+        else:
+            self.frames_ignored += 1
+        
+        # Registra por câmera
+        self.cameras_active.add(camera_name)
+        self.detections_by_camera[camera_name] += len(detections)
+        
+        # Registra por hora
+        hour = now.hour
+        self.detections_by_hour[hour] += len(detections)
+        
+        # Registra por classe e prioridade
+        for det in detections:
+            self.total_detections += 1
+            self.detections_by_class[det['class']] += 1
+            priority = det.get('priority', 'N/A')
+            self.detections_by_priority[priority] += 1
+        
+        # Registra eventos
+        if events:
+            for event in events:
+                event_type = event.split(':')[0].strip()
+                self.events_triggered[event_type] += 1
+    
+    def generate_report(self, camera_filter=None):
+        """Gera relatório formatado em texto"""
+        self.check_and_reset()
+        
+        now = datetime.now()
+        report = []
+        
+        # Cabeçalho
+        report.append("📊 RELATÓRIO DIÁRIO DE DETECÇÕES")
+        report.append("=" * 35)
+        report.append(f"📅 Data: {now.strftime('%d/%m/%Y')}")
+        report.append(f"⏰ Hora: {now.strftime('%H:%M:%S')}")
+        report.append("")
+        
+        # Resumo geral
+        report.append("📈 RESUMO GERAL")
+        report.append("-" * 35)
+        report.append(f"✅ Frames enviados: {self.total_frames_sent}")
+        report.append(f"⏭️ Frames ignorados: {self.frames_ignored}")
+        report.append(f"🎯 Total de detecções: {self.total_detections}")
+        report.append(f"📹 Câmeras ativas: {len(self.cameras_active)}")
+        
+        if self.first_detection_time and self.last_detection_time:
+            duration = self.last_detection_time - self.first_detection_time
+            hours = duration.total_seconds() / 3600
+            if hours > 0:
+                rate = self.total_frames_sent / hours
+                report.append(f"📊 Taxa: {rate:.1f} envios/hora")
+        
+        report.append("")
+        
+        # Top 5 classes
+        if self.detections_by_class:
+            report.append("🏆 TOP 5 DETECÇÕES POR CLASSE")
+            report.append("-" * 35)
+            for cls, count in self.detections_by_class.most_common(5):
+                emoji = self._get_class_emoji(cls)
+                percentage = (count / self.total_detections) * 100
+                report.append(f"{emoji} {cls}: {count} ({percentage:.1f}%)")
+            report.append("")
+        
+        # Detecções por prioridade
+        if self.detections_by_priority:
+            report.append("⚡ DETECÇÕES POR PRIORIDADE")
+            report.append("-" * 35)
+            for priority in ['HIGH', 'MEDIUM', 'LOW']:
+                count = self.detections_by_priority.get(priority, 0)
+                if count > 0:
+                    percentage = (count / self.total_detections) * 100
+                    report.append(f"{'🔴' if priority == 'HIGH' else '🟡' if priority == 'MEDIUM' else '🟢'} {priority}: {count} ({percentage:.1f}%)")
+            report.append("")
+        
+        # Eventos significativos
+        if self.events_triggered:
+            report.append("🚨 EVENTOS SIGNIFICATIVOS")
+            report.append("-" * 35)
+            for event, count in self.events_triggered.most_common():
+                report.append(f"• {event}: {count}x")
+            report.append("")
+        
+        # Horários de pico
+        if self.detections_by_hour:
+            report.append("⏰ HORÁRIOS DE PICO")
+            report.append("-" * 35)
+            top_hours = sorted(self.detections_by_hour.items(), key=lambda x: x[1], reverse=True)[:3]
+            for hour, count in top_hours:
+                report.append(f"• {hour:02d}:00-{hour:02d}:59 → {count} detecções")
+            report.append("")
+        
+        # Detecções por câmera
+        if self.detections_by_camera:
+            report.append("📹 DETECÇÕES POR CÂMERA")
+            report.append("-" * 35)
+            for camera, count in sorted(self.detections_by_camera.items(), key=lambda x: x[1], reverse=True):
+                if camera_filter is None or camera == camera_filter:
+                    report.append(f"• {camera}: {count}")
+            report.append("")
+        
+        # Rodapé
+        report.append("=" * 35)
+        report.append("🤖 NEUROSHIELD-telegram v2.0")
+        
+        return "\n".join(report)
+    
+    def _get_class_emoji(self, class_name):
+        """Retorna emoji para a classe"""
+        emoji_map = {
+            'person': '👤',
+            'car': '🚗',
+            'truck': '🚚',
+            'bus': '🚌',
+            'motorcycle': '🏍️',
+            'bicycle': '🚲',
+            'airplane': '✈️',
+            'train': '🚂',
+            'boat': '⛵',
+            'dog': '🐕',
+            'cat': '🐈',
+        }
+        return emoji_map.get(class_name, '📦')
+
+# Instância global de estatísticas
+stats = DetectionStats()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -431,6 +604,45 @@ class SimpleTelegramBot:
         else:
             logger.info(f"📬 Ping OK: {success_count}/{len(chat_ids)} chats")
 
+        return success_count > 0
+    
+    async def send_report(self, chat_ids, camera_filter=None, empresa_nome=None):
+        """Envia relatório diário para os chat IDs
+        
+        Args:
+            chat_ids: Lista de chat IDs para enviar
+            camera_filter: Filtrar por câmera específica (opcional)
+            empresa_nome: Nome da empresa (opcional)
+        """
+        if not chat_ids:
+            logger.warning("⚠️ Nenhum chat ID ativo para envio de relatório")
+            return False
+        
+        # Gera relatório
+        report_text = stats.generate_report(camera_filter=camera_filter)
+        
+        success_count = 0
+        failed_ids = []
+        for chat_id in chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=report_text,
+                    read_timeout=SEND_TIMEOUT,
+                    write_timeout=SEND_TIMEOUT,
+                    parse_mode='HTML'
+                )
+                logger.info(f"✅ Relatório enviado para chat {chat_id}")
+                success_count += 1
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar relatório para chat {chat_id}: {e}")
+                failed_ids.append(chat_id)
+        
+        if failed_ids:
+            logger.warning(f"⚠️ Envio de relatório parcial: {success_count}/{len(chat_ids)} ok; falha em {failed_ids}")
+        else:
+            logger.info(f"📬 Relatório enviado OK: {success_count}/{len(chat_ids)} chats")
+        
         return success_count > 0
 
 
@@ -986,6 +1198,14 @@ class CameraMonitor:
                                                 log_parts.append(f"{obj_list} - {self.camera_name}")
                                                 logger.info(" ".join(log_parts))
                                                 
+                                                # Registra nas estatísticas
+                                                stats.record_detection(
+                                                    self.camera_name,
+                                                    smoothed_detections,
+                                                    events=significant_events,
+                                                    frame_sent=True
+                                                )
+                                                
                                                 # Envia para Telegram
                                                 await self.telegram_bot.send_detection(
                                                     frame_with_boxes, self.camera_name, smoothed_detections,
@@ -999,6 +1219,13 @@ class CameraMonitor:
                                                 self.last_histogram = current_histogram
                                                 self.movement_streak = 0
                                             else:
+                                                # Registra nas estatísticas (frame ignorado por similaridade)
+                                                stats.record_detection(
+                                                    self.camera_name,
+                                                    smoothed_detections,
+                                                    events=None,
+                                                    frame_sent=False
+                                                )
                                                 logger.debug(f"⏭️ Cena repetida ignorada - {self.camera_name}")
                                 else:
                                     self.movement_streak = 0
@@ -1026,6 +1253,111 @@ class CameraMonitor:
     async def stop(self):
         """Para monitoramento"""
         self.running = False
+
+
+# ═══════════════════════════════════════════════════════════
+# HANDLERS DE COMANDOS TELEGRAM
+# ═══════════════════════════════════════════════════════════
+
+# Mapa global para rastrear que chat belongs to which empresa
+chat_to_empresa = {}  # {chat_id: empresa_data}
+
+async def cmd_relatorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para o comando /relatorio"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text(
+            "❌ Chat não configurado no sistema.\n"
+            "Por favor, verifique a configuração em config/empresas.json"
+        )
+        return
+    
+    # Gera e envia relatório
+    logger.info(f"📊 Relatório solicitado por {chat_id} ({empresa_data['nome']})")
+    
+    telegram_bot = SimpleTelegramBot()
+    await telegram_bot.send_report(
+        [chat_id],
+        camera_filter=None,
+        empresa_nome=empresa_data['nome']
+    )
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para o comando /status"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Constrói status
+    status_text = "✅ STATUS DO SISTEMA\n"
+    status_text += "=" * 30 + "\n"
+    status_text += f"🏢 Empresa: {empresa_data['nome']}\n"
+    status_text += f"📹 Câmeras ativas: {len([c for c in empresa_data['cameras'] if c.get('ativa', True)])}\n"
+    status_text += f"💬 Chats notificados: {len(empresa_data['telegram_chat_ids'])}\n"
+    status_text += f"📊 Total detecções hoje: {stats.total_detections}\n"
+    status_text += f"📬 Frames enviados: {stats.total_frames_sent}\n"
+    status_text += f"📹 Câmeras com detecção: {len(stats.cameras_active)}\n"
+    status_text += "=" * 30
+    
+    await update.message.reply_text(status_text)
+
+async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para o comando /help ou /ajuda"""
+    ajuda_text = """🤖 NEUROSHIELD-telegram v2.0
+
+📋 COMANDOS DISPONÍVEIS:
+
+/relatorio - 📊 Relatório detalhado do dia
+  Mostra: total de detecções, top classes,
+  timeline por hora, eventos significativos
+
+/status - ✅ Status do sistema
+  Mostra: câmeras ativas, detecções totais,
+  estatísticas do dia
+
+/ajuda - 📖 Este menu de ajuda
+
+/camera - 📹 Relatório de câmera específica (em desenvolvimento)
+
+───────────────────────────────
+🎯 DETECÇÕES AUTOMÁTICAS:
+• Pessoas, veículos, animais
+• Eventos significativos
+• Mudanças de cena
+
+🔔 NOTIFICAÇÕES:
+• Automáticas e inteligentes
+• Com confiança de detecção
+• Score de relevância
+
+Dúvidas? Contate o administrador!
+"""
+    await update.message.reply_text(ajuda_text)
+
+async def setup_telegram_handlers(application: Application):
+    """Configura handlers de comandos telegram"""
+    application.add_handler(CommandHandler("relatorio", cmd_relatorio))
+    application.add_handler(CommandHandler("status", cmd_status))
+    application.add_handler(CommandHandler("help", cmd_ajuda))
+    application.add_handler(CommandHandler("ajuda", cmd_ajuda))
+    logger.info("✅ Handlers de comandos registrados")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1093,15 +1425,43 @@ async def main():
     
     logger.info(f"🎬 Iniciando {len(monitors)} monitores de câmera")
     
-    # Inicia todos os monitores
-    tasks = [monitor.start() for monitor in monitors]
-    
+    # Inicia aplicação Telegram para handlers de comandos
     try:
-        await asyncio.gather(*tasks)
-    except KeyboardInterrupt:
-        logger.info("\n⏹️ Parando sistema...")
-        for monitor in monitors:
-            await monitor.stop()
+        app = Application.builder().token(BOT_TOKEN).build()
+        await setup_telegram_handlers(app)
+        
+        # Inicia o polling do telegram em background
+        async with app:
+            await app.initialize()
+            await app.start()
+            
+            # Inicia  monitores de câmera
+            monitor_tasks = [monitor.start() for monitor in monitors]
+            
+            try:
+                # Executa ambas: polls telegram e monitores de câmera
+                await asyncio.gather(
+                    app.updater.start_polling(),
+                    *monitor_tasks,
+                    return_exceptions=True
+                )
+            except KeyboardInterrupt:
+                logger.info("\n⏹️ Parando sistema...")
+                for monitor in monitors:
+                    await monitor.stop()
+                await app.updater.stop()
+            finally:
+                await app.stop()
+    except Exception as e:
+        logger.error(f"❌ Erro ao inicializar handlers: {e}")
+        # Mesmo com erro nos handlers, inicia os monitores
+        tasks = [monitor.start() for monitor in monitors]
+        try:
+            await asyncio.gather(*tasks)
+        except KeyboardInterrupt:
+            logger.info("\n⏹️ Parando sistema...")
+            for monitor in monitors:
+                await monitor.stop()
     
     logger.info("✅ Sistema finalizado")
 
