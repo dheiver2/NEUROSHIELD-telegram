@@ -87,6 +87,28 @@ SCENE_HASH_THRESHOLD = int(os.getenv("SCENE_HASH_THRESHOLD", "15"))           # 
 SCENE_CHANGE_THRESHOLD = float(os.getenv("SCENE_CHANGE_THRESHOLD", "0.25"))  # Mudança mínima na composição (0-1)
 ENABLE_SCENE_DETECTION = os.getenv("ENABLE_SCENE_DETECTION", "1") == "1"      # Ativa detecção de cena
 
+# Filtros avançados de detecção
+MIN_DETECTION_AREA = int(os.getenv("MIN_DETECTION_AREA", "400"))              # Área mínima em pixels² (20x20)
+MIN_ASPECT_RATIO = float(os.getenv("MIN_ASPECT_RATIO", "0.2"))                # Aspect ratio mínimo (largura/altura)
+MAX_ASPECT_RATIO = float(os.getenv("MAX_ASPECT_RATIO", "5.0"))                # Aspect ratio máximo
+TEMPORAL_SMOOTHING_FRAMES = int(os.getenv("TEMPORAL_SMOOTHING_FRAMES", "3"))  # Frames para suavização temporal
+
+# Sistema de scoring inteligente
+SCORING_CONFIDENCE_WEIGHT = float(os.getenv("SCORING_CONFIDENCE_WEIGHT", "0.3"))    # Peso da confiança
+SCORING_MOVEMENT_WEIGHT = float(os.getenv("SCORING_MOVEMENT_WEIGHT", "0.3"))        # Peso do movimento
+SCORING_NOVELTY_WEIGHT = float(os.getenv("SCORING_NOVELTY_WEIGHT", "0.2"))          # Peso da novidade
+SCORING_PERSISTENCE_WEIGHT = float(os.getenv("SCORING_PERSISTENCE_WEIGHT", "0.2"))  # Peso da persistência
+MIN_SEND_SCORE = float(os.getenv("MIN_SEND_SCORE", "50.0"))                         # Score mínimo para envio (0-100)
+
+# Agregação temporal de frames
+FRAME_AGGREGATION_WINDOW = float(os.getenv("FRAME_AGGREGATION_WINDOW", "2.0"))   # Janela de agregação em segundos
+MAX_AGGREGATED_DETECTIONS = int(os.getenv("MAX_AGGREGATED_DETECTIONS", "5"))     # Máximo de detecções agregadas
+
+# Detecção de eventos significativos
+MULTI_OBJECT_THRESHOLD = int(os.getenv("MULTI_OBJECT_THRESHOLD", "3"))           # Número para evento multi-objeto
+RAPID_MOVEMENT_THRESHOLD = int(os.getenv("RAPID_MOVEMENT_THRESHOLD", "150"))     # Pixels para movimento rápido
+ENABLE_EVENT_DETECTION = os.getenv("ENABLE_EVENT_DETECTION", "1") == "1"         # Ativa detecção de eventos
+
 # Função para carregar configuração de empresas
 def load_empresas_config():
     """Carrega configuração hierárquica de empresas"""
@@ -216,14 +238,27 @@ class SimpleDetector:
                 # Calcula centro e área para tracking
                 center_x = (x1 + x2) / 2
                 center_y = (y1 + y2) / 2
-                area = (x2 - x1) * (y2 - y1)
+                width = x2 - x1
+                height = y2 - y1
+                area = width * height
+                
+                # FILTRO 2: Área mínima (evita detecções muito pequenas/ruído)
+                if area < MIN_DETECTION_AREA:
+                    continue
+                
+                # FILTRO 3: Aspect ratio válido (evita detecções deformadas)
+                aspect_ratio = width / max(height, 1)
+                if aspect_ratio < MIN_ASPECT_RATIO or aspect_ratio > MAX_ASPECT_RATIO:
+                    continue
                 
                 detections.append({
                     "class": name,
                     "confidence": conf,
                     "box": [x1, y1, x2, y2],
                     "center": (center_x, center_y),
-                    "area": area
+                    "area": area,
+                    "aspect_ratio": aspect_ratio,
+                    "dimensions": (width, height)
                 })
         
         return detections
@@ -427,6 +462,18 @@ class CameraMonitor:
         self.last_scene_signature = None  # Assinatura da última cena enviada
         self.last_frame_hash = None  # Hash do último frame enviado
         self.scene_comparison_enabled = ENABLE_SCENE_DETECTION
+        
+        # Suavização temporal (histórico de detecções)
+        self.detection_history = []  # Lista de detecções dos últimos N frames
+        
+        # Agregação temporal
+        self.aggregation_buffer = []  # Buffer de {time, detections, frame}
+        
+        # Análise de histograma para anti-repetição
+        self.last_histogram = None  # Histograma do último frame enviado
+        
+        # Detecção de eventos
+        self.event_history = []  # Histórico de eventos detectados
     
     def _get_priority_config(self, class_name):
         """Retorna configuração de prioridade para a classe"""
@@ -497,14 +544,146 @@ class CameraMonitor:
         
         return signature
     
-    def _is_scene_different(self, current_signature, current_hash):
-        """Verifica se a cena mudou significativamente"""
+    def _calculate_histogram(self, frame):
+        """Calcula histograma de cor do frame para comparação avançada"""
+        try:
+            # Calcula histograma HSV (melhor que RGB para comparação)
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            # Histograma de Hue e Saturation (ignora Value para robustez a iluminação)
+            hist_h = cv2.calcHist([hsv], [0], None, [180], [0, 180])
+            hist_s = cv2.calcHist([hsv], [1], None, [256], [0, 256])
+            # Normaliza
+            hist_h = cv2.normalize(hist_h, hist_h).flatten()
+            hist_s = cv2.normalize(hist_s, hist_s).flatten()
+            return {'h': hist_h, 's': hist_s}
+        except Exception as e:
+            logger.warning(f"Erro ao calcular histograma: {e}")
+            return None
+    
+    def _compare_histograms(self, hist1, hist2):
+        """Compara dois histogramas e retorna similaridade (0-1, 1=idêntico)"""
+        if not hist1 or not hist2:
+            return 0.0
+        try:
+            # Correlação entre histogramas (método de Bhattacharyya)
+            similarity_h = cv2.compareHist(hist1['h'], hist2['h'], cv2.HISTCMP_BHATTACHARYYA)
+            similarity_s = cv2.compareHist(hist1['s'], hist2['s'], cv2.HISTCMP_BHATTACHARYYA)
+            # Bhattacharyya retorna 0 para idênticos, 1 para completamente diferentes
+            # Invertemos para 1=idêntico, 0=diferente
+            avg_similarity = 1 - ((similarity_h + similarity_s) / 2)
+            return max(0.0, min(1.0, avg_similarity))
+        except Exception as e:
+            logger.warning(f"Erro ao comparar histogramas: {e}")
+            return 0.0
+    
+    def _apply_temporal_smoothing(self, detections):
+        """Aplica suavização temporal às detecções para reduzir intermitências"""
+        # Adiciona detecções atuais ao histórico
+        self.detection_history.append(detections)
+        
+        # Mantém apenas os últimos N frames
+        if len(self.detection_history) > TEMPORAL_SMOOTHING_FRAMES:
+            self.detection_history.pop(0)
+        
+        # Se não temos histórico suficiente, retorna detecções atuais
+        if len(self.detection_history) < TEMPORAL_SMOOTHING_FRAMES:
+            return detections
+        
+        # Conta quantas vezes cada classe aparece no histórico
+        class_counts = {}
+        for frame_dets in self.detection_history:
+            for det in frame_dets:
+                cls = det['class']
+                class_counts[cls] = class_counts.get(cls, 0) + 1
+        
+        # Filtra detecções que aparecem em pelo menos 2/3 dos frames
+        threshold = TEMPORAL_SMOOTHING_FRAMES * 0.66
+        smoothed = [d for d in detections if class_counts.get(d['class'], 0) >= threshold]
+        
+        return smoothed
+    
+    def _calculate_detection_score(self, detections, movement_score, current_time):
+        """Calcula score ponderado para decidir se deve enviar (0-100)"""
+        if not detections:
+            return 0.0
+        
+        # 1. Score de confiança (média das confianças)
+        avg_confidence = sum(d['confidence'] for d in detections) / len(detections)
+        confidence_score = avg_confidence * 100
+        
+        # 2. Score de movimento (já calculado)
+        movement_score_norm = min(100, movement_score)
+        
+        # 3. Score de novidade (quantos objetos são novos)
+        new_count = sum(1 for d in detections if d.get('track_is_new', False))
+        novelty_score = min(100, (new_count / max(len(detections), 1)) * 100)
+        
+        # 4. Score de persistência (quantos objetos têm hits altos)
+        persistent_count = 0
+        for det in detections:
+            track = self.tracks.get(det.get('track_id'))
+            if track and track['hits'] >= self.track_min_hits * 2:
+                persistent_count += 1
+        persistence_score = min(100, (persistent_count / max(len(detections), 1)) * 100)
+        
+        # Score final ponderado
+        final_score = (
+            confidence_score * SCORING_CONFIDENCE_WEIGHT +
+            movement_score_norm * SCORING_MOVEMENT_WEIGHT +
+            novelty_score * SCORING_NOVELTY_WEIGHT +
+            persistence_score * SCORING_PERSISTENCE_WEIGHT
+        )
+        
+        return final_score
+    
+    def _detect_significant_events(self, detections, movement_score):
+        """Detecta eventos significativos que justificam envio imediato"""
+        if not ENABLE_EVENT_DETECTION or not detections:
+            return None
+        
+        events = []
+        
+        # Evento 1: Múltiplos objetos detectados simultaneamente
+        if len(detections) >= MULTI_OBJECT_THRESHOLD:
+            events.append(f"MULTI_OBJECT: {len(detections)} objetos")
+        
+        # Evento 2: Movimento rápido detectado
+        max_movement = max((d.get('movement_distance', 0) for d in detections), default=0)
+        if max_movement >= RAPID_MOVEMENT_THRESHOLD:
+            events.append(f"RAPID_MOVEMENT: {max_movement}px")
+        
+        # Evento 3: Múltiplos objetos novos
+        new_count = sum(1 for d in detections if d.get('track_is_new', False))
+        if new_count >= 2:
+            events.append(f"NEW_OBJECTS: {new_count} novos")
+        
+        # Evento 4: Mix de classes diferentes
+        unique_classes = len(set(d['class'] for d in detections))
+        if unique_classes >= 3:
+            events.append(f"DIVERSE_CLASSES: {unique_classes} tipos")
+        
+        return events if events else None
+    
+    def _is_scene_different(self, current_signature, current_hash, current_histogram=None):
+        """Verifica se a cena mudou significativamente (versão melhorada)"""
         if not self.scene_comparison_enabled:
             return True  # Se desabilitado, sempre considera diferente
         
         # Primeira cena sempre é diferente
         if self.last_scene_signature is None or self.last_frame_hash is None:
             return True
+        
+        # NOVO: Comparação de histograma (mais robusta que hash)
+        if current_histogram and self.last_histogram:
+            hist_similarity = self._compare_histograms(current_histogram, self.last_histogram)
+            # Se histogramas são muito similares (>85%), provavelmente é a mesma cena
+            if hist_similarity > 0.85:
+                logger.debug(f"⏭️ Histograma muito similar: {hist_similarity:.1%}")
+                return False
+            # Se muito diferentes (<40%), definitivamente mudou
+            if hist_similarity < 0.40:
+                logger.debug(f"🔄 Histograma muito diferente: {hist_similarity:.1%}")
+                return True
         
         # Verifica mudança no hash do frame (visual geral)
         if current_hash and self.last_frame_hash:
@@ -727,74 +906,107 @@ class CameraMonitor:
                     # Detecta objetos
                     detections = await asyncio.to_thread(self.detector.detect, frame)
                     
-                    # Aplica filtros de importância
+                    # Aplica filtros de importância e processamento avançado
                     if detections:
                         current_time = asyncio.get_event_loop().time()
                         
-                        # Filtro 1: Importância (prioridade + confiança + cooldown + debounce)
+                        # Filtro 1: Importância (prioridade + confiança + cooldown)
                         important_detections = self._filter_by_importance(detections, current_time)
                         
                         if important_detections:
-                            # Filtro 2: Movimento significativo
-                            has_movement, movement_score, moved_detections = self._calculate_movement(important_detections, current_time)
+                            # Aplica suavização temporal para reduzir falsos positivos
+                            smoothed_detections = self._apply_temporal_smoothing(important_detections)
                             
-                            if has_movement and moved_detections:
-                                qualifies = (
-                                    movement_score >= SEND_MIN_MOVEMENT_SCORE and
-                                    len(moved_detections) >= SEND_MIN_MOVED_OBJECTS
+                            if smoothed_detections:
+                                # Filtro 2: Movimento significativo
+                                has_movement, movement_score, moved_detections = self._calculate_movement(
+                                    smoothed_detections, current_time
                                 )
-                                if qualifies:
-                                    self.movement_streak += 1
+                                
+                                if has_movement and moved_detections:
+                                    # Calcula score inteligente
+                                    detection_score = self._calculate_detection_score(
+                                        moved_detections, movement_score, current_time
+                                    )
+                                    
+                                    # Detecta eventos significativos
+                                    significant_events = self._detect_significant_events(
+                                        moved_detections, movement_score
+                                    )
+                                    
+                                    # Força envio se houver evento significativo
+                                    force_send = significant_events is not None
+                                    
+                                    # Qualifica para envio por score ou evento
+                                    qualifies_by_score = detection_score >= MIN_SEND_SCORE
+                                    qualifies = force_send or qualifies_by_score
+                                    
+                                    if qualifies:
+                                        self.movement_streak += 1
+                                    else:
+                                        self.movement_streak = 0
+                                    
+                                    # Verifica streak mínimo
+                                    if self.movement_streak >= SEND_MIN_STREAK:
+                                        # Cooldown global mínimo
+                                        if current_time - self.last_send_time >= SEND_COOLDOWN:
+                                            # Calcula análises da cena
+                                            current_hash = self._calculate_frame_hash(frame)
+                                            current_histogram = self._calculate_histogram(frame)
+                                            current_signature = self._calculate_scene_signature(smoothed_detections)
+                                            
+                                            # Verifica se a cena mudou (com análise de histograma)
+                                            if self._is_scene_different(current_signature, current_hash, current_histogram):
+                                                # Desenha caixas
+                                                frame_with_boxes = self.detector.draw_boxes(
+                                                    frame.copy(), smoothed_detections
+                                                )
+                                                
+                                                # Log detalhado
+                                                obj_info = []
+                                                for d in smoothed_detections:
+                                                    priority = d.get('priority', 'N/A')
+                                                    conf = d['confidence']
+                                                    dist = d.get('movement_distance', 0)
+                                                    track_id = d.get('track_id')
+                                                    if d.get('track_is_new'):
+                                                        dist_label = "NEW"
+                                                    else:
+                                                        dist_label = f"{dist}px"
+                                                    obj_info.append(
+                                                        f"{d['class']}#{track_id}({priority},{conf:.0%},{dist_label})"
+                                                    )
+                                                
+                                                obj_list = ", ".join(obj_info)
+                                                
+                                                # Log com informações de score e eventos
+                                                log_parts = [f"🎯 Detecção (score:{detection_score:.1f})"]
+                                                if significant_events:
+                                                    log_parts.append(f"[EVENTOS: {', '.join(significant_events)}]")
+                                                log_parts.append(f"{obj_list} - {self.camera_name}")
+                                                logger.info(" ".join(log_parts))
+                                                
+                                                # Envia para Telegram
+                                                await self.telegram_bot.send_detection(
+                                                    frame_with_boxes, self.camera_name, smoothed_detections,
+                                                    self.chat_ids, self.empresa_nome
+                                                )
+                                                
+                                                # Atualiza estados
+                                                self.last_send_time = current_time
+                                                self.last_scene_signature = current_signature
+                                                self.last_frame_hash = current_hash
+                                                self.last_histogram = current_histogram
+                                                self.movement_streak = 0
+                                            else:
+                                                logger.debug(f"⏭️ Cena repetida ignorada - {self.camera_name}")
                                 else:
                                     self.movement_streak = 0
-
-                                if self.movement_streak >= SEND_MIN_STREAK:
-                                    # Cooldown global mínimo
-                                    if current_time - self.last_send_time >= SEND_COOLDOWN:
-                                        # Calcula hash e assinatura da cena atual
-                                        current_hash = self._calculate_frame_hash(frame)
-                                        current_signature = self._calculate_scene_signature(important_detections)
-                                        
-                                        # Verifica se a cena mudou significativamente
-                                        if self._is_scene_different(current_signature, current_hash):
-                                            # Desenha caixas de todos os objetos importantes do frame
-                                            frame_with_boxes = self.detector.draw_boxes(frame.copy(), important_detections)
-                                            
-                                            # Log detalhado
-                                            obj_info = []
-                                            for d in important_detections:
-                                                priority = d.get('priority', 'N/A')
-                                                conf = d['confidence']
-                                                dist = d.get('movement_distance', 0)
-                                                track_id = d.get('track_id')
-                                                if d.get('track_is_new'):
-                                                    dist_label = "NEW"
-                                                else:
-                                                    dist_label = f"{dist}px"
-                                                obj_info.append(f"{d['class']}#{track_id}({priority},{conf:.0%},{dist_label})")
-                                            
-                                            obj_list = ", ".join(obj_info)
-                                            logger.info(f"🎯 Mudança detectada ({movement_score}%): {obj_list} - {self.camera_name}")
-                                            
-                                            # Envia para Telegram
-                                            await self.telegram_bot.send_detection(
-                                                frame_with_boxes, self.camera_name, important_detections,
-                                                self.chat_ids, self.empresa_nome
-                                            )
-                                            
-                                            # Atualiza timestamps (SEM cooldown individual por classe)
-                                            self.last_send_time = current_time
-                                            self.last_scene_signature = current_signature
-                                            self.last_frame_hash = current_hash
-                                            self.movement_streak = 0
-                                        else:
-                                            logger.debug(f"⏭️ Cena repetida ignorada - {self.camera_name}")
-                            else:
-                                self.movement_streak = 0
                     else:
-                        # Nenhum objeto detectado - reseta tracking
+                        # Nenhum objeto detectado - reseta tracking e histórico
                         self.tracks = {}
                         self.movement_streak = 0
+                        self.detection_history = []
                     
                     # Pequeno delay para não sobrecarregar
                     await asyncio.sleep(0.1)
