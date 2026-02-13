@@ -38,8 +38,9 @@ MODEL_PATH = os.getenv("DETECTION_MODEL", "models/yolo26n.pt")
 CONFIDENCE = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
 NMS_IOU_THRESHOLD = float(os.getenv("NMS_IOU_THRESHOLD", "0.65"))
 DETECTION_SIZE = int(os.getenv("DETECTION_RESIZE", "640"))
+FRAME_SKIP = int(os.getenv("FRAME_SKIP", "2"))  # Processa 1 a cada N frames (otimização)
 SEND_COOLDOWN = int(os.getenv("SEND_COOLDOWN", "1"))
-SEND_WIDTH = int(os.getenv("SEND_MAX_WIDTH", "960"))
+SEND_WIDTH = int(os.getenv("SEND_MAX_WIDTH", "800"))  # Reduzido para otimizar upload
 SEND_TIMEOUT = int(os.getenv("SEND_TIMEOUT", "8"))
 STARTUP_PING = os.getenv("TELEGRAM_STARTUP_PING", "0") == "1"
 SEND_MIN_STREAK = int(os.getenv("SEND_MIN_STREAK", "1"))
@@ -93,7 +94,7 @@ ENABLE_SCENE_DETECTION = os.getenv("ENABLE_SCENE_DETECTION", "1") == "1"      # 
 MIN_DETECTION_AREA = int(os.getenv("MIN_DETECTION_AREA", "200"))              # Área mínima em pixels² (14x14)
 MIN_ASPECT_RATIO = float(os.getenv("MIN_ASPECT_RATIO", "0.2"))                # Aspect ratio mínimo (largura/altura)
 MAX_ASPECT_RATIO = float(os.getenv("MAX_ASPECT_RATIO", "5.0"))                # Aspect ratio máximo
-TEMPORAL_SMOOTHING_FRAMES = int(os.getenv("TEMPORAL_SMOOTHING_FRAMES", "3"))  # Frames para suavização temporal
+TEMPORAL_SMOOTHING_FRAMES = int(os.getenv("TEMPORAL_SMOOTHING_FRAMES", "2"))  # Frames para suavização temporal (otimizado)
 
 # Sistema de scoring inteligente
 SCORING_CONFIDENCE_WEIGHT = float(os.getenv("SCORING_CONFIDENCE_WEIGHT", "0.3"))    # Peso da confiança
@@ -103,7 +104,7 @@ SCORING_PERSISTENCE_WEIGHT = float(os.getenv("SCORING_PERSISTENCE_WEIGHT", "0.2"
 MIN_SEND_SCORE = float(os.getenv("MIN_SEND_SCORE", "50.0"))                         # Score mínimo para envio (0-100)
 
 # Agregação temporal de frames
-FRAME_AGGREGATION_WINDOW = float(os.getenv("FRAME_AGGREGATION_WINDOW", "2.0"))   # Janela de agregação em segundos
+FRAME_AGGREGATION_WINDOW = float(os.getenv("FRAME_AGGREGATION_WINDOW", "1.5"))   # Janela de agregação em segundos (otimizado)
 MAX_AGGREGATED_DETECTIONS = int(os.getenv("MAX_AGGREGATED_DETECTIONS", "5"))     # Máximo de detecções agregadas
 
 # Detecção de eventos significativos
@@ -1131,6 +1132,9 @@ class CameraMonitor:
                 
                 logger.info(f"✅ Conectado: {self.camera_name}")
                 
+                # Contador de frames para skip
+                frame_counter = 0
+                
                 # Loop de captura
                 while self.running:
                     ret, frame = cap.read()
@@ -1139,6 +1143,12 @@ class CameraMonitor:
                         logger.warning(f"⚠️ Falha ao ler frame: {self.camera_name}")
                         await asyncio.sleep(1)
                         break
+                    
+                    # Frame skip para otimização de performance
+                    frame_counter += 1
+                    if frame_counter % FRAME_SKIP != 0:
+                        await asyncio.sleep(0.01)  # Pequena pausa para não travar buffer
+                        continue
                     
                     # Detecta objetos
                     detections = await asyncio.to_thread(self.detector.detect, frame)
@@ -1260,8 +1270,8 @@ class CameraMonitor:
                         self.movement_streak = 0
                         self.detection_history = []
                     
-                    # Pequeno delay para não sobrecarregar
-                    await asyncio.sleep(0.1)
+                    # Delay otimizado
+                    await asyncio.sleep(0.05)
             
             except Exception as e:
                 logger.error(f"❌ Erro em {self.camera_name}: {e}")
