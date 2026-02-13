@@ -1,44 +1,78 @@
 {
   "empresas": [
     {
-      "id": "pcsafe",
-      "nome": "PCSafe",
+      "id": "neuroshield_pacsafe",
+      "nome": "NEUROSHIELD - PACSAFE",
       "telegram_chat_ids": [
         "5871339278",
         "6452106412",
         "8566048157"
       ],
       "cameras": [
-        {
-          "id": "cam_1",
-          "nome": "Camera 1 - Ch1",
-          "rtsp_url": "rtsp://apoio:apoio2025@189.89.50.1:7081/cam/realmonitor?channel=1&subtype=0",
-          "ativa": true
-        },
-        {
-          "id": "cam_2",
-          "nome": "Camera 2 - Ch5",
-          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=5&subtype=0",
-          "ativa": true
-        },
-        {
-          "id": "cam_3",
-          "nome": "Camera 3 - Ch1",
-          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=1&subtype=0",
-          "ativa": true
-        },
-        {
-          "id": "cam_4",
-          "nome": "Camera 4 - Ch7",
-          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=7&subtype=0",
-          "ativa": true
-        },
-        {
-          "id": "cam_5",
-          "nome": "Camera 5 - Ch14",
-          "rtsp_url": "rtsp://apoio:apoio5971@189.89.50.1:7070/cam/realmonitor?channel=14&subtype=0",
-          "ativa": true
-        }
+        {"id": "cam_001", "nome": "PACSAFE Câmera 001", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0101", "ativa": true},
+        {"id": "cam_002", "nome": "PACSAFE Câmera 002", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0201", "ativa": true},
+        {"id": "cam_003", "nome": "PACSAFE Câmera 003", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0301", "ativa": true},
+        {"id": "cam_004", "nome": "PACSAFE Câmera 004", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0401", "ativa": true},
+        {"id": "cam_005", "nome": "PACSAFE Câmera 005", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0501", "ativa": true},
+        {"id": "cam_006", "nome": "PACSAFE Câmera 006", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0601", "ativa": true},
+        {"id": "cam_007", "nome": "PACSAFE Câmera 007", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0701", "ativa": true},
+        {"id": "cam_008", "nome": "PACSAFE Câmera 008", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0801", "ativa": true},
+        {"id": "cam_009", "nome": "PACSAFE Câmera 009", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/0901", "ativa": true},
+        {"id": "cam_010", "nome": "PACSAFE Câmera 010", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1001", "ativa": true},
+        {"id": "cam_011", "nome": "PACSAFE Câmera 011", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1101", "ativa": true},
+        {"id": "cam_012", "nome": "PACSAFE Câmera 012", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1201", "ativa": true},
+        {"id": "cam_013", "nome": "PACSAFE Câmera 013", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1301", "ativa": true},
+        {"id": "cam_014", "nome": "PACSAFE Câmera 014", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1401", "ativa": true},
+        {"id": "cam_015", "nome": "PACSAFE Câmera 015", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1501", "ativa": true},
+        {"id": "cam_016", "nome": "PACSAFE Câmera 016", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1601", "ativa": true},
+        {"id": "cam_017", "nome": "PACSAFE Câmera 017", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1701", "ativa": true},
+        {"id": "cam_018", "nome": "PACSAFE Câmera 018", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1801", "ativa": true},
+        {"id": "cam_019", "nome": "PACSAFE Câmera 019", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/1901", "ativa": true},
+        {"id": "cam_020", "nome": "PACSAFE Câmera 020", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2001", "ativa": true},
+        {"id": "cam_021", "nome": "PACSAFE Câmera 021", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2101", "ativa": true},
+        {"id": "cam_022", "nome": "PACSAFE Câmera 022", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2201", "ativa": true},
+        {"id": "cam_023", "nome": "PACSAFE Câmera 023", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2301", "ativa": true},
+        {"id": "cam_024", "nome": "PACSAFE Câmera 024", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2401", "ativa": true},
+        {"id": "cam_025", "nome": "PACSAFE Câmera 025", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2501", "ativa": true},
+        {"id": "cam_026", "nome": "PACSAFE Câmera 026", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2601", "ativa": true},
+        {"id": "cam_027", "nome": "PACSAFE Câmera 027", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2701", "ativa": true},
+        {"id": "cam_028", "nome": "PACSAFE Câmera 028", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2801", "ativa": true},
+        {"id": "cam_029", "nome": "PACSAFE Câmera 029", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/2901", "ativa": true},
+        {"id": "cam_030", "nome": "PACSAFE Câmera 030", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/3001", "ativa": true},
+        {"id": "cam_031", "nome": "PACSAFE Câmera 031", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/3101", "ativa": true},
+        {"id": "cam_032", "nome": "PACSAFE Câmera 032", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1800/Streaming/channels/3201", "ativa": true},
+        {"id": "cam_033", "nome": "PACSAFE Câmera 033", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0101", "ativa": true},
+        {"id": "cam_034", "nome": "PACSAFE Câmera 034", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0201", "ativa": true},
+        {"id": "cam_035", "nome": "PACSAFE Câmera 035", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0301", "ativa": true},
+        {"id": "cam_036", "nome": "PACSAFE Câmera 036", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0401", "ativa": true},
+        {"id": "cam_037", "nome": "PACSAFE Câmera 037", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0501", "ativa": true},
+        {"id": "cam_038", "nome": "PACSAFE Câmera 038", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0601", "ativa": true},
+        {"id": "cam_039", "nome": "PACSAFE Câmera 039", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0701", "ativa": true},
+        {"id": "cam_040", "nome": "PACSAFE Câmera 040", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0801", "ativa": true},
+        {"id": "cam_041", "nome": "PACSAFE Câmera 041", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/0901", "ativa": true},
+        {"id": "cam_042", "nome": "PACSAFE Câmera 042", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1001", "ativa": true},
+        {"id": "cam_043", "nome": "PACSAFE Câmera 043", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1101", "ativa": true},
+        {"id": "cam_044", "nome": "PACSAFE Câmera 044", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1201", "ativa": true},
+        {"id": "cam_045", "nome": "PACSAFE Câmera 045", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1301", "ativa": true},
+        {"id": "cam_046", "nome": "PACSAFE Câmera 046", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1401", "ativa": true},
+        {"id": "cam_047", "nome": "PACSAFE Câmera 047", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1501", "ativa": true},
+        {"id": "cam_048", "nome": "PACSAFE Câmera 048", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1601", "ativa": true},
+        {"id": "cam_049", "nome": "PACSAFE Câmera 049", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1701", "ativa": true},
+        {"id": "cam_050", "nome": "PACSAFE Câmera 050", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1801", "ativa": true},
+        {"id": "cam_051", "nome": "PACSAFE Câmera 051", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/1901", "ativa": true},
+        {"id": "cam_052", "nome": "PACSAFE Câmera 052", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2001", "ativa": true},
+        {"id": "cam_053", "nome": "PACSAFE Câmera 053", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2101", "ativa": true},
+        {"id": "cam_054", "nome": "PACSAFE Câmera 054", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2201", "ativa": true},
+        {"id": "cam_055", "nome": "PACSAFE Câmera 055", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2301", "ativa": true},
+        {"id": "cam_056", "nome": "PACSAFE Câmera 056", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2401", "ativa": true},
+        {"id": "cam_057", "nome": "PACSAFE Câmera 057", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2501", "ativa": true},
+        {"id": "cam_058", "nome": "PACSAFE Câmera 058", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2601", "ativa": true},
+        {"id": "cam_059", "nome": "PACSAFE Câmera 059", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2701", "ativa": true},
+        {"id": "cam_060", "nome": "PACSAFE Câmera 060", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2801", "ativa": true},
+        {"id": "cam_061", "nome": "PACSAFE Câmera 061", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/2901", "ativa": true},
+        {"id": "cam_062", "nome": "PACSAFE Câmera 062", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/3001", "ativa": true},
+        {"id": "cam_063", "nome": "PACSAFE Câmera 063", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/3101", "ativa": true},
+        {"id": "cam_064", "nome": "PACSAFE Câmera 064", "rtsp_url": "rtsp://pacsafe:Safe!2026@45.187.84.213:1801/Streaming/channels/3201", "ativa": true}
       ]
     }
   ]

@@ -35,9 +35,9 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CONFIG_EMPRESAS_PATH = "config/empresas.json"
 USE_EMPRESAS_CONFIG = os.path.exists(CONFIG_EMPRESAS_PATH)
 MODEL_PATH = os.getenv("DETECTION_MODEL", "models/yolo26n.pt")
-CONFIDENCE = float(os.getenv("CONFIDENCE_THRESHOLD", "0.35"))
+CONFIDENCE = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
 NMS_IOU_THRESHOLD = float(os.getenv("NMS_IOU_THRESHOLD", "0.65"))
-DETECTION_SIZE = int(os.getenv("DETECTION_RESIZE", "480"))
+DETECTION_SIZE = int(os.getenv("DETECTION_RESIZE", "640"))
 SEND_COOLDOWN = int(os.getenv("SEND_COOLDOWN", "1"))
 SEND_WIDTH = int(os.getenv("SEND_MAX_WIDTH", "960"))
 SEND_TIMEOUT = int(os.getenv("SEND_TIMEOUT", "8"))
@@ -75,7 +75,7 @@ COOLDOWN_MEDIUM_PRIORITY = int(os.getenv("COOLDOWN_MEDIUM_PRIORITY", "10"))  # 1
 COOLDOWN_LOW_PRIORITY = int(os.getenv("COOLDOWN_LOW_PRIORITY", "30"))        # 30s para objetos
 
 # Confiança mínima por prioridade
-MIN_CONFIDENCE_HIGH = float(os.getenv("MIN_CONFIDENCE_HIGH", "0.40"))        # 40% para importantes
+MIN_CONFIDENCE_HIGH = float(os.getenv("MIN_CONFIDENCE_HIGH", "0.30"))        # 30% para importantes
 MIN_CONFIDENCE_MEDIUM = float(os.getenv("MIN_CONFIDENCE_MEDIUM", "0.50"))    # 50% para médios
 MIN_CONFIDENCE_LOW = float(os.getenv("MIN_CONFIDENCE_LOW", "0.70"))          # 70% para comuns
 
@@ -90,7 +90,7 @@ SCENE_CHANGE_THRESHOLD = float(os.getenv("SCENE_CHANGE_THRESHOLD", "0.25"))  # M
 ENABLE_SCENE_DETECTION = os.getenv("ENABLE_SCENE_DETECTION", "1") == "1"      # Ativa detecção de cena
 
 # Filtros avançados de detecção
-MIN_DETECTION_AREA = int(os.getenv("MIN_DETECTION_AREA", "400"))              # Área mínima em pixels² (20x20)
+MIN_DETECTION_AREA = int(os.getenv("MIN_DETECTION_AREA", "200"))              # Área mínima em pixels² (14x14)
 MIN_ASPECT_RATIO = float(os.getenv("MIN_ASPECT_RATIO", "0.2"))                # Aspect ratio mínimo (largura/altura)
 MAX_ASPECT_RATIO = float(os.getenv("MAX_ASPECT_RATIO", "5.0"))                # Aspect ratio máximo
 TEMPORAL_SMOOTHING_FRAMES = int(os.getenv("TEMPORAL_SMOOTHING_FRAMES", "3"))  # Frames para suavização temporal
@@ -196,6 +196,10 @@ class DetectionStats:
         self.first_detection_time = None
         self.last_detection_time = None
         self.cameras_active = set()  # Câmeras que tiveram detecção
+        self.last_detections = []  # Lista de últimas detecções
+        self.class_counts = Counter()  # Alias para detections_by_class
+        self.camera_detections = defaultdict(int)  # Alias para detections_by_camera
+        self.detected_events = Counter()  # Alias para events_triggered
     
     def check_and_reset(self):
         """Verifica se mudou o dia e reseta se necessário"""
@@ -227,9 +231,11 @@ class DetectionStats:
         self.detections_by_hour[hour] += len(detections)
         
         # Registra por classe e prioridade
+        classes_list = []
         for det in detections:
             self.total_detections += 1
             self.detections_by_class[det['class']] += 1
+            classes_list.append(det['class'])
             priority = det.get('priority', 'N/A')
             self.detections_by_priority[priority] += 1
         
@@ -238,6 +244,25 @@ class DetectionStats:
             for event in events:
                 event_type = event.split(':')[0].strip()
                 self.events_triggered[event_type] += 1
+        
+        # Adiciona à lista de últimas detecções (mantém as 50 mais recentes)
+        detection_record = {
+            'timestamp': now.isoformat(),
+            'camera': camera_name,
+            'classes': classes_list,
+            'count': len(detections),
+            'score': detections[0].get('confidence', 0) if detections else 0,
+            'events': events or [],
+            'sent': frame_sent
+        }
+        self.last_detections.append(detection_record)
+        if len(self.last_detections) > 50:
+            self.last_detections.pop(0)
+        
+        # Atualiza aliases
+        self.class_counts = self.detections_by_class
+        self.camera_detections = self.detections_by_camera
+        self.detected_events = self.events_triggered
     
     def generate_report(self, camera_filter=None):
         """Gera relatório formatado em texto"""
@@ -1328,13 +1353,26 @@ async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
   Mostra: total de detecções, top classes,
   timeline por hora, eventos significativos
 
-/status - ✅ Status do sistema
+/status - ✅ Status geral do sistema
   Mostra: câmeras ativas, detecções totais,
-  estatísticas do dia
+  estatísticas gerais
+
+/resumo - 📈 Resumo ultra-rápido
+  Mostra: números principais só
+
+/cameras - 📹 Lista de câmeras e status
+  Mostra: todas as câmeras e seu status
+
+/status_cameras - ℹ️ Detalhes de cada câmera
+  Mostra: tempo de conexão, fps, últimas detecções
+
+/top_eventos - 🚨 Top 5 eventos do dia
+  Mostra: eventos mais significativos
+
+/historico - 📚 Últimas 10 detecções
+  Mostra: detecções mais recentes com timestamps
 
 /ajuda - 📖 Este menu de ajuda
-
-/camera - 📹 Relatório de câmera específica (em desenvolvimento)
 
 ───────────────────────────────
 🎯 DETECÇÕES AUTOMÁTICAS:
@@ -1351,13 +1389,204 @@ Dúvidas? Contate o administrador!
 """
     await update.message.reply_text(ajuda_text)
 
+async def cmd_resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /resumo - relatório ultra-rápido"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Resumo rápido com números principais
+    resumo_text = "📈 RESUMO RÁPIDO\n"
+    resumo_text += "=" * 30 + "\n"
+    resumo_text += f"📊 Detecções: {stats.total_detections}\n"
+    resumo_text += f"📬 Frames enviados: {stats.total_frames_sent}\n"
+    resumo_text += f"👤 Pessoas: {stats.class_counts.get('person', 0)}\n"
+    resumo_text += f"🚗 Veículos: {stats.class_counts.get('car', 0) + stats.class_counts.get('truck', 0) + stats.class_counts.get('bus', 0)}\n"
+    resumo_text += f"📹 Câmeras ativas: {len([c for c in empresa_data['cameras'] if c.get('ativa', True)])}\n"
+    
+    if stats.detected_events:
+        resumo_text += f"🚨 Eventos: {len(stats.detected_events)}\n"
+    
+    resumo_text += "=" * 30
+    
+    await update.message.reply_text(resumo_text)
+
+async def cmd_cameras(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /cameras - lista de câmeras"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Lista de câmeras
+    cameras_text = f"📹 CÂMERAS DE {empresa_data['nome'].upper()}\n"
+    cameras_text += "=" * 40 + "\n"
+    
+    for i, camera in enumerate(empresa_data['cameras'], 1):
+        status = "✅ ATIVA" if camera.get('ativa', True) else "❌ INATIVA"
+        cameras_text += f"{i}. {camera['nome']}\n"
+        cameras_text += f"   Status: {status}\n"
+        cameras_text += f"   Detecções: {stats.camera_detections.get(camera['nome'], 0)}\n"
+        cameras_text += "\n"
+    
+    cameras_text += "=" * 40
+    
+    await update.message.reply_text(cameras_text)
+
+async def cmd_status_cameras(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /status_cameras - detalhes de cada câmera"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    status_text = "📹 STATUS DAS CÂMERAS\n"
+    status_text += "=" * 40 + "\n"
+    
+    for camera in empresa_data['cameras']:
+        nome = camera['nome']
+        ativa = "✅" if camera.get('ativa', True) else "❌"
+        deteccoes = stats.camera_detections.get(nome, 0)
+        
+        status_text += f"{ativa} {nome}\n"
+        status_text += f"   Detecções hoje: {deteccoes}\n"
+        
+        # Últimas detecções desta câmera
+        ultimas = [d for d in stats.last_detections[-5:] if d.get('camera') == nome]
+        if ultimas:
+            ultima = ultimas[-1]
+            tempo_atras = (datetime.now() - datetime.fromisoformat(ultima['timestamp'])).seconds
+            status_text += f"   Última detecção: há {tempo_atras}s\n"
+            status_text += f"   Classes: {', '.join(ultima.get('classes', []))}\n"
+        else:
+            status_text += f"   Última detecção: nenhuma\n"
+        
+        status_text += "\n"
+    
+    status_text += "=" * 40
+    
+    await update.message.reply_text(status_text)
+
+async def cmd_top_eventos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /top_eventos - top 5 eventos do dia"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    eventos_text = "🚨 TOP 5 EVENTOS DO DIA\n"
+    eventos_text += "=" * 40 + "\n"
+    
+    if not stats.detected_events:
+        eventos_text += "Nenhum evento significativo detectado\n"
+    else:
+        # Ordena eventos por importância (múltiplos objetos primeiro, depois outros)
+        ordernado = sorted(
+            stats.detected_events.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:5]
+        
+        for i, (tipo_evento, count) in enumerate(ordernado, 1):
+            emoji_map = {
+                'MULTI_OBJECT': '👥',
+                'RAPID_MOVEMENT': '💨',
+                'NEW_OBJECTS': '✨',
+                'DIVERSE_CLASSES': '🎯'
+            }
+            emoji = emoji_map.get(tipo_evento, '🔔')
+            eventos_text += f"{i}. {emoji} {tipo_evento}: {count}x\n"
+    
+    eventos_text += "=" * 40
+    
+    await update.message.reply_text(eventos_text)
+
+async def cmd_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /historico - últimas 10 detecções"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    historico_text = "📚 HISTÓRICO - ÚLTIMAS DETECÇÕES\n"
+    historico_text += "=" * 40 + "\n"
+    
+    if not stats.last_detections:
+        historico_text += "Nenhuma detecção registrada\n"
+    else:
+        for i, det in enumerate(stats.last_detections[-10:], 1):
+            tempo = datetime.fromisoformat(det['timestamp']).strftime("%H:%M:%S")
+            camera = det.get('camera', 'desconhecida')
+            classes = ', '.join(det.get('classes', []))
+            score = det.get('score', 0)
+            
+            historico_text += f"{i}. {tempo} | {camera}\n"
+            historico_text += f"   Classes: {classes}\n"
+            historico_text += f"   Score: {score:.1f}\n"
+    
+    historico_text += "=" * 40
+    
+    await update.message.reply_text(historico_text)
+
 async def setup_telegram_handlers(application: Application):
     """Configura handlers de comandos telegram"""
+    # Relatórios e Análise
     application.add_handler(CommandHandler("relatorio", cmd_relatorio))
+    application.add_handler(CommandHandler("resumo", cmd_resumo))
+    application.add_handler(CommandHandler("top_eventos", cmd_top_eventos))
+    application.add_handler(CommandHandler("historico", cmd_historico))
+    
+    # Status e Monitoramento
     application.add_handler(CommandHandler("status", cmd_status))
+    application.add_handler(CommandHandler("cameras", cmd_cameras))
+    application.add_handler(CommandHandler("status_cameras", cmd_status_cameras))
+    
+    # Ajuda
     application.add_handler(CommandHandler("help", cmd_ajuda))
     application.add_handler(CommandHandler("ajuda", cmd_ajuda))
-    logger.info("✅ Handlers de comandos registrados")
+    
+    logger.info("✅ Handlers de comandos registrados (9 comandos disponíveis)")
 
 
 # ═══════════════════════════════════════════════════════════

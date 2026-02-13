@@ -12,6 +12,12 @@ NEUROSHIELD-telegram é um sistema de segurança inteligente que monitora câmer
 
 **Arquitetura Hierárquica**: Empresas → Câmeras → Chat IDs
 
+### 📊 Configuração Atual
+- **64 Câmeras PACSAFE** configuradas
+- **Layout 8x8** (matriz de 8 linhas × 8 colunas)
+- **2 Servidores RTSP** (portas 1800 e 1801)
+- **Servidor**: 45.187.84.213
+
 ## ✨ Características
 
 ### 🚀 **Núcleo**
@@ -82,6 +88,8 @@ Edite `config/empresas.json`:
 }
 ```
 
+**🎯 Configuração Atual**: O sistema já vem com 64 câmeras PACSAFE configuradas. Consulte [config/PACSAFE_CAMERAS.md](config/PACSAFE_CAMERAS.md) para detalhes completos.
+
 ### 4️⃣ Configure Telegram
 Edite `config/.env`:
 
@@ -117,6 +125,7 @@ NEUROSHIELD-telegram/
 ├── requirements.txt              # 📦 Dependências
 ├── config/
 │   ├── empresas.json            # 🏢 Empresas/Câmeras/IDs
+│   ├── PACSAFE_CAMERAS.md       # 📋 Documentação 64 câmeras
 │   ├── .env                     # ⚙️ Configurações técnicas
 │   ├── .env.raspberry           # 🥧 Config otimizada RPi4
 │   └── coco8.yaml               # 📋 Classes YOLO
