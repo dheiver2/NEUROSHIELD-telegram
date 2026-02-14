@@ -11,11 +11,12 @@ import logging
 import json
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from ultralytics import YOLO
 from dotenv import load_dotenv
 from fila_envio import FilaEnvioInteligente, ItemFila, PrioridadeEnvio, ConfiguracaoFila
+from comportamentos import DetectorComportamento, TipoComportamento, COMPORTAMENTOS_DISPONIVEIS
 
 # Configuração de logging simples
 logging.basicConfig(
@@ -370,6 +371,15 @@ class DetectionStats:
 # Instância global de estatísticas
 stats = DetectionStats()
 
+# ═══════════════════════════════════════════════════════════
+# DETECTOR DE COMPORTAMENTOS DA CIDADE
+# ═══════════════════════════════════════════════════════════
+# Gerenciador de preferências de comportamento por chat_id
+comportamentos_por_chat = defaultdict(set)  # {chat_id: {TipoComportamento, ...}}
+
+# Detector global compartilhado entre câmeras
+detector_comportamentos = DetectorComportamento()
+
 
 # ═══════════════════════════════════════════════════════════
 # DETECTOR DE OBJETOS
@@ -558,15 +568,30 @@ class SimpleTelegramBot:
             await self.fila_task
             logger.info("⏹️ Processador de fila parado")
     
-    def _determinar_prioridade(self, detections, events=None):
-        """Determina prioridade baseado em eventos e detecções"""
+    def _determinar_prioridade(self, detections, events=None, comportamentos=None):
+        """Determina prioridade baseado em eventos, detecções e comportamentos"""
         events = events or []
+        comportamentos = comportamentos or []
+        
+        # CRÍTICO: Comportamentos severos ou eventos de segurança críticos
+        if comportamentos:
+            for tipo_comp, _ in comportamentos:
+                config = COMPORTAMENTOS_DISPONIVEIS[tipo_comp]
+                if config.severidade >= 5:  # Atropelamento, Possível Assalto, etc
+                    return PrioridadeEnvio.CRITICA
         
         # CRÍTICO: Eventos de segurança
         if events:
             for evento in events:
                 if any(x in evento for x in ['MULTI_OBJECT', 'RAPID_MOVEMENT']):
                     return PrioridadeEnvio.CRITICA
+        
+        # ALTA: Comportamentos graves
+        if comportamentos:
+            for tipo_comp, _ in comportamentos:
+                config = COMPORTAMENTOS_DISPONIVEIS[tipo_comp]
+                if config.severidade >= 4:
+                    return PrioridadeEnvio.ALTA
         
         # ALTA: Múltiplas detecções ou classes prioritárias
         if len(detections) >= 2:
@@ -1268,8 +1293,27 @@ class CameraMonitor:
                                                 
                                                 obj_list = ", ".join(obj_info)
                                                 
-                                                # Log com informações de score e eventos
+                                                # Detecta comportamentos (aglomeração, acidentes, etc)
+                                                comportamentos_detectados = detector_comportamentos.detectar_comportamento(
+                                                    moved_detections, movement_score
+                                                )
+                                                
+                                                # Monta lista de eventos com comportamentos
+                                                all_events = list(significant_events) if significant_events else []
+                                                comportamento_str = []
+                                                
+                                                if comportamentos_detectados:
+                                                    for tipo_comportamento, descricao in comportamentos_detectados:
+                                                        comportamento_str.append(f"⚠️ {descricao}")
+                                                        all_events.append(descricao)
+                                                        detector_comportamentos.registrar_evento(
+                                                            tipo_comportamento, self.camera_name, moved_detections
+                                                        )
+                                                
+                                                # Log com informações de score, eventos e comportamentos
                                                 log_parts = [f"🎯 Detecção (score:{detection_score:.1f})"]
+                                                if comportamento_str:
+                                                    log_parts.append(f"[COMPORTAMENTOS DETECTADOS: {', '.join(comportamento_str)}]")
                                                 if significant_events:
                                                     log_parts.append(f"[EVENTOS: {', '.join(significant_events)}]")
                                                 log_parts.append(f"{obj_list} - {self.camera_name}")
@@ -1279,15 +1323,29 @@ class CameraMonitor:
                                                 stats.record_detection(
                                                     self.camera_name,
                                                     smoothed_detections,
-                                                    events=significant_events,
+                                                    events=all_events if all_events else None,
                                                     frame_sent=True
                                                 )
                                                 
-                                                # Envia para Telegram
-                                                await self.telegram_bot.send_detection(
-                                                    frame_with_boxes, self.camera_name, smoothed_detections,
-                                                    self.chat_ids, self.empresa_nome
-                                                )
+                                                # Envia para cada chat_id que está monitorando comportamentos detectados ou se não há filtros ativos
+                                                for chat_id in self.chat_ids:
+                                                    chat_comportamentos = comportamentos_por_chat.get(chat_id, set())
+                                                    
+                                                    # Se o chat não tem comportamentos selecionados, envia tudo
+                                                    if not chat_comportamentos:
+                                                        await self.telegram_bot.send_detection(
+                                                            frame_with_boxes, self.camera_name, smoothed_detections,
+                                                            [chat_id], self.empresa_nome, events=all_events if all_events else None
+                                                        )
+                                                    else:
+                                                        # Se tem comportamentos selecionados, envia apenas se houver match
+                                                        for tipo_comp, _ in comportamentos_detectados:
+                                                            if tipo_comp in chat_comportamentos:
+                                                                await self.telegram_bot.send_detection(
+                                                                    frame_with_boxes, self.camera_name, smoothed_detections,
+                                                                    [chat_id], self.empresa_nome, events=all_events if all_events else None
+                                                                )
+                                                                break  # Evita duplicação por chat
                                                 
                                                 # Atualiza estados
                                                 self.last_send_time = current_time
@@ -1662,6 +1720,203 @@ async def cmd_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Envia relatório
     await update.message.reply_text(f"```\n{fila_text}\n```", parse_mode='Markdown')
 
+async def cmd_comportamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /comportamentos - mostra todos os comportamentos disponíveis"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Lista todos os comportamentos
+    texto = "🏙️ COMPORTAMENTOS DISPONÍVEIS PARA MONITORAR\n"
+    texto += "=" * 50 + "\n\n"
+    
+    for tipo, config in COMPORTAMENTOS_DISPONIVEIS.items():
+        status = "✅" if tipo in comportamentos_por_chat[chat_id] else "⭕"
+        severidade_stars = "🔴" * config.severidade + "⚪" * (5 - config.severidade)
+        
+        texto += f"{status} {config.emoji} {config.nome}\n"
+        texto += f"   {config.descricao}\n"
+        texto += f"   Severidade: {severidade_stars}\n"
+        texto += f"   Requer: {config.minimo_objetos} objetos\n\n"
+    
+    texto += "=" * 50
+    texto += "\nUse: /monitorar para escolher comportamentos"
+    
+    await update.message.reply_text(texto)
+
+async def cmd_monitorar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /monitorar - interface interativa para escolher comportamentos"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Cria botões inline para cada comportamento
+    keyboard = []
+    
+    for tipo, config in sorted(COMPORTAMENTOS_DISPONIVEIS.items(), 
+                              key=lambda x: x[1].severidade, reverse=True):
+        status = "✅" if tipo in comportamentos_por_chat[chat_id] else "❌"
+        botao_text = f"{status} {config.emoji} {config.nome}"
+        callback_data = f"comportamento_toggle_{tipo.value}"
+        
+        keyboard.append([
+            InlineKeyboardButton(botao_text, callback_data=callback_data)
+        ])
+    
+    # Botão para listar selecionados
+    keyboard.append([
+        InlineKeyboardButton("📋 Ver Selecionados", callback_data="comportamento_listar"),
+        InlineKeyboardButton("✅ Pronto", callback_data="comportamento_pronto")
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🎯 SELECIONE COMPORTAMENTOS PARA MONITORAR\n\n"
+        "Clique nos comportamentos que deseja monitorar.\n"
+        "Você receberá alertas quando eles forem detectados.",
+        reply_markup=reply_markup
+    )
+
+async def callback_comportamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para callbacks de comportamentos"""
+    query = update.callback_query
+    chat_id = query.from_user.id
+    
+    await query.answer()  # Remove o "loading"
+    
+    if query.data == "comportamento_listar":
+        # Mostra comportamentos selecionados
+        if not comportamentos_por_chat[chat_id]:
+            texto = "❌ Nenhum comportamento selecionado"
+        else:
+            texto = "✅ COMPORTAMENTOS SELECIONADOS:\n\n"
+            for tipo in comportamentos_por_chat[chat_id]:
+                config = COMPORTAMENTOS_DISPONIVEIS[tipo]
+                texto += f"{config.emoji} {config.nome}\n"
+        
+        await query.edit_message_text(texto)
+    
+    elif query.data == "comportamento_pronto":
+        # Finaliza seleção
+        selecionados = len(comportamentos_por_chat[chat_id])
+        if selecionados == 0:
+            texto = "❌ Você não selecionou nenhum comportamento.\n\nUse /monitorar novamente."
+        else:
+            texto = f"✅ {selecionados} comportamento(s) selecionado(s) para monitoramento!\n"
+            texto += "\n🎯 Você receberá alertas em caso de detecção."
+        
+        await query.edit_message_text(texto)
+    
+    elif query.data.startswith("comportamento_toggle_"):
+        # Toggle de comportamento
+        tipo_str = query.data.replace("comportamento_toggle_", "")
+        
+        # Encontra o tipo de comportamento
+        tipo = None
+        for t in TipoComportamento:
+            if t.value == tipo_str:
+                tipo = t
+                break
+        
+        if not tipo:
+            await query.answer("Erro na seleção", show_alert=True)
+            return
+        
+        # Toggle
+        if tipo in comportamentos_por_chat[chat_id]:
+            comportamentos_por_chat[chat_id].discard(tipo)
+            logger.info(f"❌ Chat {chat_id}: Removido {tipo.value}")
+        else:
+            comportamentos_por_chat[chat_id].add(tipo)
+            logger.info(f"✅ Chat {chat_id}: Adicionado {tipo.value}")
+        
+        # Reconstrói o menu
+        keyboard = []
+        
+        for tipo_item, config in sorted(COMPORTAMENTOS_DISPONIVEIS.items(),
+                                       key=lambda x: x[1].severidade, reverse=True):
+            status = "✅" if tipo_item in comportamentos_por_chat[chat_id] else "❌"
+            botao_text = f"{status} {config.emoji} {config.nome}"
+            callback_data = f"comportamento_toggle_{tipo_item.value}"
+            
+            keyboard.append([
+                InlineKeyboardButton(botao_text, callback_data=callback_data)
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("📋 Ver", callback_data="comportamento_listar"),
+            InlineKeyboardButton("✅ Pronto", callback_data="comportamento_pronto")
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+
+async def cmd_meus_comportamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para /meus_comportamentos - mostra comportamentos sendo monitorados"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    selecionados = comportamentos_por_chat[chat_id]
+    
+    if not selecionados:
+        texto = "❌ Você não está monitorando nenhum comportamento\n\n"
+        texto += "Use /monitorar para escolher"
+    else:
+        texto = f"✅ MONITORANDO {len(selecionados)} COMPORTAMENTO(S):\n\n"
+        
+        for tipo in sorted(selecionados, 
+                          key=lambda x: COMPORTAMENTOS_DISPONIVEIS[x].severidade, 
+                          reverse=True):
+            config = COMPORTAMENTOS_DISPONIVEIS[tipo]
+            severidade = "🔴" * config.severidade + "⚪" * (5 - config.severidade)
+            
+            texto += f"{config.emoji} {config.nome}\n"
+            texto += f"   Severidade: {severidade}\n"
+            texto += f"   Status: ATIVO ✅\n\n"
+        
+        # Mostra histórico recente de eventos
+        eventos_recentes = detector_comportamentos.obter_historico(limite=5)
+        eventos_recentes_filt = [e for e in eventos_recentes 
+                                 if TipoComportamento[e['tipo'].upper()] in selecionados]
+        
+        if eventos_recentes_filt:
+            texto += "\n📋 ÚLTIMOS EVENTS:\n"
+            for evento in eventos_recentes_filt[-3:]:
+                tempo = evento['timestamp'].split('T')[1][:5]
+                texto += f"  • {tempo} - {evento['descricao']}\n"
+    
+    await update.message.reply_text(texto)
+
 async def setup_telegram_handlers(application: Application):
     """Configura handlers de comandos telegram"""
     # Relatórios e Análise
@@ -1670,6 +1925,12 @@ async def setup_telegram_handlers(application: Application):
     application.add_handler(CommandHandler("top_eventos", cmd_top_eventos))
     application.add_handler(CommandHandler("historico", cmd_historico))
     application.add_handler(CommandHandler("fila", cmd_fila))
+    
+    # Comportamentos e Monitoramento da Cidade
+    application.add_handler(CommandHandler("comportamentos", cmd_comportamentos))
+    application.add_handler(CommandHandler("monitorar", cmd_monitorar))
+    application.add_handler(CommandHandler("meus_comportamentos", cmd_meus_comportamentos))
+    application.add_handler(CallbackQueryHandler(callback_comportamento, pattern="^comportamento_"))
     
     # Status e Monitoramento
     application.add_handler(CommandHandler("status", cmd_status))
@@ -1680,7 +1941,7 @@ async def setup_telegram_handlers(application: Application):
     application.add_handler(CommandHandler("help", cmd_ajuda))
     application.add_handler(CommandHandler("ajuda", cmd_ajuda))
     
-    logger.info("✅ Handlers de comandos registrados (10 comandos disponíveis)")
+    logger.info("✅ Handlers de comandos registrados (13 comandos disponíveis)")
 
 
 # ═══════════════════════════════════════════════════════════
