@@ -5,25 +5,48 @@ Versão minimalista: Conecta câmeras -> Detecta objetos -> Envia Telegram
 Suporta estrutura hierárquica: Empresas -> Câmeras -> Chat IDs
 """
 import os
+import sys
 import cv2
 import asyncio
 import logging
 import json
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
+from contextlib import contextmanager
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from ultralytics import YOLO
 from dotenv import load_dotenv
 from fila_envio import FilaEnvioInteligente, ItemFila, PrioridadeEnvio, ConfiguracaoFila
 from comportamentos import DetectorComportamento, TipoComportamento, COMPORTAMENTOS_DISPONIVEIS
-
 # Configuração de logging simples
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════
+# SUPRESSÃO DE LOGS DO FFMPEG
+# ═══════════════════════════════════════════════════════════
+@contextmanager
+def suppress_ffmpeg_logs():
+    """Context manager para suprimir logs verbose do FFmpeg/OpenCV"""
+    # Salva o stderr original
+    old_stderr = sys.stderr
+    old_stdout = sys.stdout
+    
+    try:
+        # Redireciona para /dev/null (Unix) ou nul (Windows)
+        devnull_path = '/dev/null' if sys.platform != 'win32' else 'nul'
+        with open(devnull_path, 'w') as devnull:
+            sys.stderr = devnull
+            sys.stdout = devnull
+            yield
+    finally:
+        # Restaura stderr original
+        sys.stderr = old_stderr
+        sys.stdout = old_stdout
 
 # Carrega variáveis de ambiente
 load_dotenv("config/.env")
@@ -1187,14 +1210,16 @@ class CameraMonitor:
         while self.running:
             cap = None
             try:
-                # Conecta à câmera
+                # Conecta à câmera (suprime logs verbose do FFmpeg)
                 logger.info(f"🔌 Conectando: {self.camera_name}")
-                cap = cv2.VideoCapture(self.rtsp_url)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                with suppress_ffmpeg_logs():
+                    cap = cv2.VideoCapture(self.rtsp_url)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
                 if not cap.isOpened():
                     logger.error(f"❌ Falha ao conectar: {self.camera_name}")
                     await asyncio.sleep(10)
+                    continue
                     continue
                 
                 logger.info(f"✅ Conectado: {self.camera_name}")
@@ -1204,7 +1229,8 @@ class CameraMonitor:
                 
                 # Loop de captura
                 while self.running:
-                    ret, frame = cap.read()
+                    with suppress_ffmpeg_logs():
+                        ret, frame = cap.read()
                     
                     if not ret or frame is None:
                         logger.warning(f"⚠️ Falha ao ler frame: {self.camera_name}")
