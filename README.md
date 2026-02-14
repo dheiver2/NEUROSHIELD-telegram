@@ -25,6 +25,8 @@ NEUROSHIELD-telegram é um sistema de segurança inteligente que monitora câmer
 ✅ Multi-empresa com isolamento de notificações  
 ✅ Tracking multi-objeto em tempo real  
 ✅ Sistema anti-repetição inteligente  
+✅ **Fila inteligente** com priorização e rate limiting  
+✅ **Detecção de comportamentos** (aglomerações, acidentes, crimes)  
 
 ### 🎯 **Detecção Focada**
 - 👤 **person** (pessoas)
@@ -100,7 +102,14 @@ CONFIDENCE_THRESHOLD=0.35
 
 ### 5️⃣ Execute o Bot
 ```bash
+# Execução simples
 python simple_bot.py
+
+# OU com launcher alternativo
+python run.py
+
+# OU com logs detalhados de inicialização
+python start_bot.py
 ```
 
 ## 📖 Como Obter Credenciais do Telegram
@@ -120,7 +129,11 @@ python simple_bot.py
 ```
 NEUROSHIELD-telegram/
 ├── simple_bot.py                 # 🧠 Core do sistema
-├── run.py                        # 🚀 Launcher
+├── run.py                        # 🚀 Launcher simples
+├── start_bot.py                  # 🚀 Launcher com logs detalhados
+├── fila_envio.py                 # 📤 Sistema de fila inteligente
+├── comportamentos.py             # 🎯 Detector de comportamentos
+├── CMD_FILA_ADDON.py            # 📊 Comando /fila adicional
 ├── requirements.txt              # 📦 Dependências
 ├── config/
 │   ├── empresas.json            # 🏢 Empresas/Câmeras/IDs
@@ -159,6 +172,65 @@ graph LR
    - ✅ Mudança de cena (anti-repetição)
    - ✅ Cooldown dinâmico
 5. **Notificação**: Envia foto + dados para Telegram da empresa
+
+## 🎯 Sistema de Detecção de Comportamentos
+
+O sistema identifica automaticamente padrões de comportamento suspeitos ou perigosos:
+
+### 🚨 Comportamentos Detectados
+
+| Tipo | Emoji | Descrição | Severidade |
+|------|-------|-----------|------------|
+| **Aglomeração** | 👥 | 3+ pessoas próximas | ⚠️⚠️ |
+| **Acidente de Trânsito** | 🚗💥 | 2+ veículos colidindo | ⚠️⚠️⚠️⚠️ |
+| **Atropelamento** | ⚠️🚗 | Pessoa + veículo muito próximos | ⚠️⚠️⚠️⚠️⚠️ |
+| **Atividade Suspeita** | 🚨 | Movimento rápido anômalo | ⚠️⚠️⚠️⚠️ |
+| **Congestionamento** | 🚦 | 5+ veículos acumulados | ⚠️⚠️ |
+| **Potencial Assalto** | 💰 | Pessoas com movimento rápido | ⚠️⚠️⚠️⚠️ |
+| **Manifestação** | 📢 | Grande aglomeração em movimento | ⚠️⚠️⚠️ |
+
+### ⚙️ Configuração
+
+Cada comportamento pode ser ajustado em `comportamentos.py`:
+- Mínimo de objetos necessários
+- Velocidade mínima (pixels/frame)
+- Distância máxima entre objetos
+- Classes de objetos esperadas
+- Nível de severidade
+
+## 📤 Sistema de Fila Inteligente
+
+Gerencia envios para Telegram com eficiência profissional:
+
+### 🎯 Recursos
+- ⚡ **Priorização automática** (Crítica → Alta → Normal → Baixa)
+- 🚦 **Rate limiting** (até 50 envios/minuto)
+- 🔄 **Retry automático** em caso de erro
+- 📊 **Estatísticas em tempo real**
+- ⏱️ **Cooldown dinâmico** por câmera e chat
+- 🎚️ **Controle de carga** (max 3 envios simultâneos)
+
+### 📋 Níveis de Prioridade
+
+| Prioridade | Delay Mínimo | Uso |
+|------------|--------------|-----|
+| 🔴 **CRÍTICA** | 1s | Eventos críticos (atropelamento, crime) |
+| 🟠 **ALTA** | 3s | Múltiplos objetos, movimento rápido |
+| 🟡 **NORMAL** | 5s | Detecção padrão |
+| 🟢 **BAIXA** | 10s | Confirmações, histórico |
+
+### 📊 Comando /fila
+
+Monitore o status da fila em tempo real:
+```
+/fila
+```
+
+Retorna:
+- Itens na fila
+- Taxa de envio
+- Estatísticas por câmera
+- Estatísticas por prioridade
 
 ## 💻 Exemplos de Uso
 
@@ -362,11 +434,26 @@ COOLDOWN_HIGH_PRIORITY=5
 # (remova câmeras menos críticas do empresas.json)
 ```
 
+## 🤖 Comandos do Bot
+
+Comandos disponíveis no Telegram:
+
+| Comando | Descrição |
+|---------|----------|
+| `/start` | Inicia o bot e mostra boas-vindas |
+| `/status` | Mostra status das câmeras e detecções |
+| `/cameras` | Lista todas as câmeras da empresa |
+| `/fila` | Mostra status da fila de envio |
+| `/help` | Exibe ajuda com todos os comandos |
+
 ## 📈 Roadmap
 
+- [x] Sistema de fila inteligente com priorização
+- [x] Detecção de comportamentos (aglomerações, acidentes, crimes)
+- [x] Comando /fila para monitoramento
 - [ ] Interface Web para gerenciamento
 - [ ] Suporte a gravação de vídeo
-- [ ] Análise de comportamento (loitering)
+- [ ] Análise avançada de comportamento (loitering, zones)
 - [ ] Reconhecimento facial
 - [ ] API REST para integração
 - [ ] Dashboard de estatísticas
