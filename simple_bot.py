@@ -15,6 +15,7 @@ from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from ultralytics import YOLO
 from dotenv import load_dotenv
+from fila_envio import FilaEnvioInteligente, ItemFila, PrioridadeEnvio, ConfiguracaoFila
 
 # Configuração de logging simples
 logging.basicConfig(
@@ -524,23 +525,66 @@ class SimpleDetector:
 
 
 # ═══════════════════════════════════════════════════════════
-# BOT TELEGRAM
+# BOT TELEGRAM COM FILA INTELIGENTE
 # ═══════════════════════════════════════════════════════════
 class SimpleTelegramBot:
     def __init__(self):
-        logger.info("💬 Inicializando bot Telegram")
+        logger.info("💬 Inicializando bot Telegram com fila inteligente")
         self.bot = Bot(token=BOT_TOKEN)
-        logger.info(f"✅ Bot conectado")
+        
+        # Configura fila de envios
+        config_fila = ConfiguracaoFila()
+        config_fila.max_envios_simultaneos = 3          # 3 envios simultâneos        config_fila.max_envios_por_minuto = 50         # Max 50 por minuto (profissional)
+        config_fila.delay_entre_cameras[PrioridadeEnvio.CRITICA] = 1    # 1s críticas
+        config_fila.delay_entre_cameras[PrioridadeEnvio.ALTA] = 2       # 2s alta
+        config_fila.delay_entre_cameras[PrioridadeEnvio.NORMAL] = 3     # 3s normal
+        config_fila.delay_entre_cameras[PrioridadeEnvio.BAIXA] = 5      # 5s baixa
+        
+        self.fila = FilaEnvioInteligente(self.bot, config_fila)
+        self.fila_task = None
+        
+        logger.info(f"✅ Bot e fila configurados")
     
-    async def send_detection(self, frame, camera_name, detections, chat_ids, empresa_nome=None):
-        """Envia frame com detecções para o Telegram
+    async def iniciar(self):
+        """Inicia o processamento da fila"""
+        if self.fila_task is None or self.fila_task.done():
+            self.fila_task = asyncio.create_task(self.fila.processar_fila())
+            logger.info("🚀 Processador de fila iniciado")
+    
+    async def parar(self):
+        """Para o processamento da fila"""
+        await self.fila.parar()
+        if self.fila_task:
+            await self.fila_task
+            logger.info("⏹️ Processador de fila parado")
+    
+    def _determinar_prioridade(self, detections, events=None):
+        """Determina prioridade baseado em eventos e detecções"""
+        events = events or []
+        
+        # CRÍTICO: Eventos de segurança
+        if events:
+            for evento in events:
+                if any(x in evento for x in ['MULTI_OBJECT', 'RAPID_MOVEMENT']):
+                    return PrioridadeEnvio.CRITICA
+        
+        # ALTA: Múltiplas detecções ou classes prioritárias
+        if len(detections) >= 2:
+            return PrioridadeEnvio.ALTA
+        
+        # NORMAL: Detecção padrão
+        return PrioridadeEnvio.NORMAL
+    
+    async def send_detection(self, frame, camera_name, detections, chat_ids, empresa_nome=None, events=None):
+        """Adiciona detecção à fila de envio
         
         Args:
             frame: Frame com detecções desenhadas
             camera_name: Nome da câmera
             detections: Lista de detecções
             chat_ids: Lista de chat IDs para enviar
-            empresa_nome: Nome da empresa (opcional, para incluir no caption)
+            empresa_nome: Nome da empresa (opcional)
+            events: Lista de eventos significativos (opcional)
         """
         if not chat_ids:
             logger.warning("⚠️ Nenhum chat ID ativo para envio")
@@ -566,32 +610,30 @@ class SimpleTelegramBot:
         else:
             caption = f"🎯 {camera_name}\n⏰ {timestamp}\n🔍 {obj_list}"
         
-        # Envia para todos os chats ativos
-        success = False
-        success_count = 0
-        failed_ids = []
-        for chat_id in chat_ids:
-            try:
-                await self.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo_bytes,
-                    caption=caption,
-                    read_timeout=SEND_TIMEOUT,
-                    write_timeout=SEND_TIMEOUT
-                )
-                logger.info(f"✅ Enviado para chat {chat_id}: {camera_name}")
-                success = True
-                success_count += 1
-            except Exception as e:
-                logger.error(f"❌ Erro ao enviar para chat {chat_id}: {e}")
-                failed_ids.append(chat_id)
-
-        if failed_ids:
-            logger.warning(f"⚠️ Envio parcial: {success_count}/{len(chat_ids)} ok; falha em {failed_ids}")
-        else:
-            logger.info(f"📬 Envio OK: {success_count}/{len(chat_ids)} chats")
+        # Determina prioridade
+        prioridade = self._determinar_prioridade(detections, events)
         
-        return success
+        # Cria item da fila
+        item = ItemFila(
+            camera_id=camera_name.replace(" ", "_"),
+            camera_nome=camera_name,
+            empresa_nome=empresa_nome or "Sistema",
+            chat_ids=chat_ids,
+            frame_bytes=photo_bytes,
+            caption=caption,
+            prioridade=prioridade,
+            deteccoes=detections
+        )
+        
+        # Adiciona à fila
+        await self.fila.adicionar(item)
+        
+        logger.info(
+            f"📥 {camera_name} adicionado à fila "
+            f"(prioridade: {prioridade.name}, detecções: {len(detections)})"
+        )
+        
+        return True
 
     async def send_startup_ping(self, chat_ids, empresa_nome=None):
         """Envia ping simples para validar todos os chat IDs
@@ -1340,15 +1382,29 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Chat não configurado")
         return
     
+    # Pega estatísticas da fila
+    telegram_bot = globals().get('telegram_bot_instance')
+    stats_fila = telegram_bot.fila.obter_estatisticas() if telegram_bot else {}
+    
     # Constrói status
     status_text = "✅ STATUS DO SISTEMA\n"
     status_text += "=" * 30 + "\n"
     status_text += f"🏢 Empresa: {empresa_data['nome']}\n"
     status_text += f"📹 Câmeras ativas: {len([c for c in empresa_data['cameras'] if c.get('ativa', True)])}\n"
     status_text += f"💬 Chats notificados: {len(empresa_data['telegram_chat_ids'])}\n"
-    status_text += f"📊 Total detecções hoje: {stats.total_detections}\n"
+    status_text += f"📊 Total detecções: {stats.total_detections}\n"
     status_text += f"📬 Frames enviados: {stats.total_frames_sent}\n"
     status_text += f"📹 Câmeras com detecção: {len(stats.cameras_active)}\n"
+    
+    # Informações da fila
+    if stats_fila:
+        status_text += "\n" + "🔄 FILA DE ENVIO\n"
+        status_text += "-" * 30 + "\n"
+        status_text += f"✅ Enviados: {stats_fila.get('total_enviados', 0)}\n"
+        status_text += f"❌ Erros: {stats_fila.get('total_erros', 0)}\n"
+        status_text += f"⏳ Na fila: {stats_fila.get('itens_na_fila', 0)}\n"
+        status_text += f"📈 Taxa: {stats_fila.get('taxa_sucesso', 0):.1f}%\n"
+    
     status_text += "=" * 30
     
     await update.message.reply_text(status_text)
@@ -1579,6 +1635,33 @@ async def cmd_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(historico_text)
 
+async def cmd_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para o comando /fila - mostra status da fila de envio"""
+    chat_id = update.effective_chat.id
+    
+    # Encontra a empresa deste chat
+    empresa_data = None
+    for empresa in EMPRESAS:
+        if chat_id in empresa['telegram_chat_ids']:
+            empresa_data = empresa
+            break
+    
+    if not empresa_data:
+        await update.message.reply_text("❌ Chat não configurado")
+        return
+    
+    # Pega referência do bot
+    telegram_bot = globals().get('telegram_bot_instance')
+    if not telegram_bot:
+        await update.message.reply_text("❌ Bot não inicializado")
+        return
+    
+    # Gera relatório da fila
+    fila_text = telegram_bot.fila.gerar_relatorio()
+    
+    # Envia relatório
+    await update.message.reply_text(f"```\n{fila_text}\n```", parse_mode='Markdown')
+
 async def setup_telegram_handlers(application: Application):
     """Configura handlers de comandos telegram"""
     # Relatórios e Análise
@@ -1586,6 +1669,7 @@ async def setup_telegram_handlers(application: Application):
     application.add_handler(CommandHandler("resumo", cmd_resumo))
     application.add_handler(CommandHandler("top_eventos", cmd_top_eventos))
     application.add_handler(CommandHandler("historico", cmd_historico))
+    application.add_handler(CommandHandler("fila", cmd_fila))
     
     # Status e Monitoramento
     application.add_handler(CommandHandler("status", cmd_status))
@@ -1596,7 +1680,7 @@ async def setup_telegram_handlers(application: Application):
     application.add_handler(CommandHandler("help", cmd_ajuda))
     application.add_handler(CommandHandler("ajuda", cmd_ajuda))
     
-    logger.info("✅ Handlers de comandos registrados (9 comandos disponíveis)")
+    logger.info("✅ Handlers de comandos registrados (10 comandos disponíveis)")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1618,6 +1702,9 @@ async def main():
     # Inicializa componentes
     detector = SimpleDetector()
     telegram_bot = SimpleTelegramBot()
+    
+    # Guarda referência global para handlers acessarem
+    globals()['telegram_bot_instance'] = telegram_bot
 
     # Envia ping de startup se configurado
     if STARTUP_PING:
@@ -1664,6 +1751,9 @@ async def main():
     
     logger.info(f"🎬 Iniciando {len(monitors)} monitores de câmera")
     
+    # Inicia fila de envios
+    await telegram_bot.iniciar()
+    
     # Inicia aplicação Telegram para handlers de comandos
     try:
         app = Application.builder().token(BOT_TOKEN).build()
@@ -1678,7 +1768,7 @@ async def main():
             monitor_tasks = [monitor.start() for monitor in monitors]
             
             try:
-                # Executa ambas: polls telegram e monitores de câmera
+                # Executa ambas: polls telegram e monitores de câmera + fila
                 await asyncio.gather(
                     app.updater.start_polling(),
                     *monitor_tasks,
@@ -1688,8 +1778,10 @@ async def main():
                 logger.info("\n⏹️ Parando sistema...")
                 for monitor in monitors:
                     await monitor.stop()
+                await telegram_bot.parar()
                 await app.updater.stop()
             finally:
+                await telegram_bot.parar()
                 await app.stop()
     except Exception as e:
         logger.error(f"❌ Erro ao inicializar handlers: {e}")
@@ -1701,6 +1793,8 @@ async def main():
             logger.info("\n⏹️ Parando sistema...")
             for monitor in monitors:
                 await monitor.stop()
+        finally:
+            await telegram_bot.parar()
     
     logger.info("✅ Sistema finalizado")
 
