@@ -12,6 +12,12 @@ from dotenv import load_dotenv
 load_dotenv("config/.env")
 os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "error")  # use "quiet" para silenciar tudo
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+if os.getenv("RTSP_TCP", "1") == "1":
+    rtsp_timeout_us = os.getenv("RTSP_TIMEOUT_US", "5000000")
+    os.environ.setdefault(
+        "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+        f"rtsp_transport;tcp|stimeout;{rtsp_timeout_us}"
+    )
 
 import cv2
 import asyncio
@@ -77,6 +83,13 @@ STARTUP_PING = os.getenv("TELEGRAM_STARTUP_PING", "0") == "1"
 SEND_MIN_STREAK = int(os.getenv("SEND_MIN_STREAK", "1"))
 SEND_MIN_MOVEMENT_SCORE = int(os.getenv("SEND_MIN_MOVEMENT_SCORE", "0"))
 SEND_MIN_MOVED_OBJECTS = int(os.getenv("SEND_MIN_MOVED_OBJECTS", "1"))
+RTSP_TCP = os.getenv("RTSP_TCP", "1") == "1"
+RTSP_TIMEOUT_US = int(os.getenv("RTSP_TIMEOUT_US", "5000000"))
+READ_FAIL_THRESHOLD = int(os.getenv("READ_FAIL_THRESHOLD", "5"))
+CONNECT_FAIL_THRESHOLD = int(os.getenv("CONNECT_FAIL_THRESHOLD", "3"))
+RECONNECT_BASE_DELAY = int(os.getenv("RECONNECT_BASE_DELAY", "10"))
+RECONNECT_MAX_DELAY = int(os.getenv("RECONNECT_MAX_DELAY", "120"))
+OFFLINE_ALERT_COOLDOWN = int(os.getenv("OFFLINE_ALERT_COOLDOWN", "300"))
 
 # Tracking (multi-objeto)
 TRACK_IOU_THRESHOLD = float(os.getenv("TRACK_IOU_THRESHOLD", "0.30"))
@@ -808,6 +821,34 @@ class CameraMonitor:
         
         # Detecção de eventos
         self.event_history = []  # Histórico de eventos detectados
+
+        # Saúde da conexão e backoff
+        self.read_failures = 0
+        self.connect_failures = 0
+        self.reconnect_delay = RECONNECT_BASE_DELAY
+        self.reconnect_failures = 0
+        self.offline_since = None
+        self.last_offline_alert = 0
+
+    def _reset_connection_state(self):
+        self.read_failures = 0
+        self.connect_failures = 0
+        self.reconnect_delay = RECONNECT_BASE_DELAY
+        self.reconnect_failures = 0
+        self.offline_since = None
+
+    def _next_reconnect_delay(self):
+        self.reconnect_failures += 1
+        delay = RECONNECT_BASE_DELAY * (2 ** (self.reconnect_failures - 1))
+        self.reconnect_delay = min(delay, RECONNECT_MAX_DELAY)
+        return self.reconnect_delay
+
+    def _maybe_log_offline(self, reason, current_time):
+        if self.offline_since is None:
+            self.offline_since = current_time
+        if current_time - self.last_offline_alert >= OFFLINE_ALERT_COOLDOWN:
+            logger.warning(f"⚠️ Câmera offline: {self.camera_name} ({reason})")
+            self.last_offline_alert = current_time
     
     def _get_priority_config(self, class_name):
         """Retorna configuração de prioridade para a classe"""
@@ -1215,6 +1256,7 @@ class CameraMonitor:
         
         while self.running:
             cap = None
+            reconnect_reason = None
             try:
                 # Conecta à câmera (suprime logs verbose do FFmpeg)
                 logger.info(f"🔌 Conectando: {self.camera_name}")
@@ -1223,12 +1265,15 @@ class CameraMonitor:
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
                 if not cap.isOpened():
+                    self.connect_failures += 1
+                    current_time = asyncio.get_event_loop().time()
+                    self._maybe_log_offline("falha ao conectar", current_time)
                     logger.error(f"❌ Falha ao conectar: {self.camera_name}")
-                    await asyncio.sleep(10)
-                    continue
-                    continue
+                    reconnect_reason = "connect_fail"
+                    raise ConnectionError("Falha ao conectar")
                 
                 logger.info(f"✅ Conectado: {self.camera_name}")
+                self._reset_connection_state()
                 
                 # Contador de frames para skip
                 frame_counter = 0
@@ -1239,9 +1284,20 @@ class CameraMonitor:
                         ret, frame = cap.read()
                     
                     if not ret or frame is None:
-                        logger.warning(f"⚠️ Falha ao ler frame: {self.camera_name}")
-                        await asyncio.sleep(1)
-                        break
+                        self.read_failures += 1
+                        if self.read_failures >= READ_FAIL_THRESHOLD:
+                            current_time = asyncio.get_event_loop().time()
+                            self._maybe_log_offline("falha ao ler frame", current_time)
+                            logger.warning(
+                                f"⚠️ Falha ao ler frame: {self.camera_name} "
+                                f"({self.read_failures}x)"
+                            )
+                            break
+                        await asyncio.sleep(0.2)
+                        continue
+                    
+                    if self.read_failures:
+                        self.read_failures = 0
                     
                     # Frame skip para otimização de performance
                     frame_counter += 1
@@ -1405,6 +1461,8 @@ class CameraMonitor:
                     # Delay otimizado
                     await asyncio.sleep(0.05)
             
+            except ConnectionError:
+                pass
             except Exception as e:
                 logger.error(f"❌ Erro em {self.camera_name}: {e}")
             
@@ -1414,8 +1472,9 @@ class CameraMonitor:
                     logger.info(f"🔌 Desconectado: {self.camera_name}")
                 
                 if self.running:
-                    logger.info(f"🔄 Reconectando em 10s: {self.camera_name}")
-                    await asyncio.sleep(10)
+                    delay = self._next_reconnect_delay()
+                    logger.info(f"🔄 Reconectando em {delay}s: {self.camera_name}")
+                    await asyncio.sleep(delay)
     
     async def stop(self):
         """Para monitoramento"""
