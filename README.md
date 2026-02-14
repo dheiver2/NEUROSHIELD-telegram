@@ -12,11 +12,10 @@ NEUROSHIELD-telegram é um sistema de segurança inteligente que monitora câmer
 
 **Arquitetura Hierárquica**: Empresas → Câmeras → Chat IDs
 
-### 📊 Configuração Atual
-- **64 Câmeras PACSAFE** configuradas
-- **Layout 8x8** (matriz de 8 linhas × 8 colunas)
-- **2 Servidores RTSP** (portas 1800 e 1801)
-- **Servidor**: 45.187.84.213
+### 📊 Configuração (exemplo)
+- **Múltiplas câmeras** configuradas no arquivo de exemplo
+- **Layout em grade** (ex.: 8x8)
+- **Vários servidores RTSP** (ex.: portas 1800 e 1801)
 
 ## ✨ Características
 
@@ -88,7 +87,7 @@ Edite `config/empresas.json`:
 }
 ```
 
-**🎯 Configuração Atual**: O sistema já vem com 64 câmeras PACSAFE configuradas. Consulte [config/PACSAFE_CAMERAS.md](config/PACSAFE_CAMERAS.md) para detalhes completos.
+**🎯 Observação**: O sistema já vem com um arquivo de exemplo com múltiplas câmeras configuradas.
 
 ### 4️⃣ Configure Telegram
 Edite `config/.env`:
@@ -125,15 +124,13 @@ NEUROSHIELD-telegram/
 ├── requirements.txt              # 📦 Dependências
 ├── config/
 │   ├── empresas.json            # 🏢 Empresas/Câmeras/IDs
-│   ├── PACSAFE_CAMERAS.md       # 📋 Documentação 64 câmeras
 │   ├── .env                     # ⚙️ Configurações técnicas
+│   ├── .env.example             # 🧪 Exemplo de configuração
 │   ├── .env.raspberry           # 🥧 Config otimizada RPi4
 │   └── coco8.yaml               # 📋 Classes YOLO
 ├── models/
 │   └── yolo26n.pt              # 🎯 Modelo YOLOv8 Nano
-└── docs/
-    ├── README.md
-    └── ESTRUTURA_HIERARQUICA.md # 📚 Guia de estrutura
+└── README.md                     # 📚 Documentação principal
 ```
 
 ## 🎯 Como Funciona
@@ -289,7 +286,7 @@ SCENE_CHANGE_THRESHOLD=0.25  # 0-1 (menor=mais sensível)
 }
 ```
 
-Veja [ESTRUTURA_HIERARQUICA.md](ESTRUTURA_HIERARQUICA.md) para detalhes.
+Consulte a seção de configuração acima para detalhes.
 
 ## 🔒 Segurança
 
@@ -379,8 +376,8 @@ COOLDOWN_HIGH_PRIORITY=5
 
 ## 📚 Documentação Adicional
 
-- [ESTRUTURA_HIERARQUICA.md](ESTRUTURA_HIERARQUICA.md) - Guia completo da estrutura de empresas
 - [config/.env.raspberry](config/.env.raspberry) - Configuração otimizada para Raspberry Pi 4
+- [config/.env.example](config/.env.example) - Exemplo de variáveis de ambiente
 
 ## 🤝 Contribuindo
 
