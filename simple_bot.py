@@ -6,6 +6,13 @@ Suporta estrutura hierárquica: Empresas -> Câmeras -> Chat IDs
 """
 import os
 import sys
+from dotenv import load_dotenv
+
+# Carrega variáveis antes do OpenCV para controlar logs do FFmpeg/OpenCV
+load_dotenv("config/.env")
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "error")  # use "quiet" para silenciar tudo
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+
 import cv2
 import asyncio
 import logging
@@ -16,7 +23,6 @@ from contextlib import contextmanager
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from ultralytics import YOLO
-from dotenv import load_dotenv
 from fila_envio import FilaEnvioInteligente, ItemFila, PrioridadeEnvio, ConfiguracaoFila
 from comportamentos import DetectorComportamento, TipoComportamento, COMPORTAMENTOS_DISPONIVEIS
 # Configuração de logging simples
@@ -49,7 +55,7 @@ def suppress_ffmpeg_logs():
         sys.stdout = old_stdout
 
 # Carrega variáveis de ambiente
-load_dotenv("config/.env")
+# (já carregado acima para configurar logs do OpenCV/FFmpeg)
 
 # ═══════════════════════════════════════════════════════════
 # CONFIGURAÇÕES
